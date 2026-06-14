@@ -1,0 +1,2 @@
+surface,topo_length_m,map_length_m,covered_length_m,overlap_pct,buffer_dist_m,n_map_features,n_topo_features
+TOP_RTZinf_merged_resampled_original,16811.787239402194,11303.782356046653,0.0,0.0,50.0,34,18

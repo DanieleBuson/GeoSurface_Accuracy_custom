@@ -1,0 +1,14 @@
+# Core
+pandas
+numpy
+matplotlib
+scipy
+scikit-learn
+pyproj
+plotly
+networkx
+# Geo
+geopandas
+shapely
+fiona
+gdal
