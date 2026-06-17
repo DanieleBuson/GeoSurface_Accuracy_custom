@@ -1,10 +1,24 @@
 """
 GeoSurface_Accuracy - custom dataset, ORIGINAL (non-resampled) inputs.
 
-Runs the horizontal/vertical/combined confidence pipeline plus the boundary-overlap
-metric on the Trentino dataset using the original (non-resampled) topo-intersection
-and geological-map-boundary shapefiles. See ../GeoSurface_Accuracy_custom/CONTEXT.md
-for the full explanation of how this dataset maps onto THEORY.md.
+Uses the original-resolution horizon surfaces (original/GOCAD_ASCII_All.ts),
+separate original fault surfaces (original/GOCAD_ASCII_Faults.ts), and the
+non-resampled topo-intersection and geological-map shapefiles.
+
+Key changes vs the previous version:
+  - .ts source: original/GOCAD_ASCII_All.ts (horizons) + original/GOCAD_ASCII_Faults.ts
+  - Stratigraphic contact matching: STRAT_MAP translation (Base_X → correct surface)
+  - Enhanced boundary overlap: bidirectional A↔B, mean/median/P95/max distance
+  - Fault throw impact layer per horizon (IDW proxy from fault surface Z-difference)
+  - Fault trace validation vs mapped tectonic contacts
+  - Fault throw qualitative comparison (model vs Faglie/Giaciture)
+  - Per-surface acceptance classification
+    (Thickness property may be absent in original .ts files; handled gracefully)
+
+CRS baseline: EPSG:6707 (ED50/UTM32N) for all new spatial comparisons.
+Faglie_carta_geologica_DEF.shp and Giaciture_FB.shp are natively EPSG:6707.
+Other vector data (loaded in EPSG:7791) is reprojected to EPSG:6707 before
+being passed to custom_validation functions.
 
 Outputs are written to ./output_results_original/.
 """
@@ -18,27 +32,43 @@ from custom_utils import (
     generate_accuracy_outputs,
     generate_vertical_outputs,
     generate_combined_confidence,
-    generate_boundary_overlap_outputs,
     visualize_data,
 )
+from custom_validation import (
+    STRAT_MAP,
+    select_map_lines_strat,
+    generate_enhanced_boundary_overlap,
+    compute_fault_throw_per_horizon,
+    generate_fault_validation_outputs,
+    generate_fault_throw_comparison,
+    compute_unit_thickness_at_grid,
+    generate_acceptance_table,
+)
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Configuration
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 WORKING_DIR = "working_files_folder"
 OUTPUT_DIR = "output_results_original"
 
-TS_FILE = "GOCAD_ASCII_All.ts"
+TS_HORIZONS_FILE = os.path.join("original", "GOCAD_ASCII_All.ts")
+TS_FAULTS_FILE = os.path.join("original", "GOCAD_ASCII_Faults.ts")
+
 SECTIONS_FILE = "3D_SectionsGrid.shp"
-MAPS_FILE = "Limiti_CartaGeol.shp"
-TOPO_FILE = "3D_Topo_Intersections.shp"
+MAPS_FILE = "Limiti_CartaGeol.shp"               # stratigraphic contacts (original)
+TOPO_FILE = "3D_Topo_Intersections.shp"          # horizon topo-intersections
+FAULTS_TOPO_FILE = "3D_Topo_Intersections_Faults.shp"
+LIMITI_ORIG_FILE = "Limiti_CartaGeol.shp"        # same file for tectonic contacts
+FAGLIE_FILE = "Faglie_carta_geologica_DEF.shp"   # native EPSG:6707
+GIACITURE_FILE = "Giaciture_FB.shp"              # native EPSG:6707
 
-CRS = "EPSG:7791"  # RDN2008 / UTM zone 32N (matches all source .prj files)
+CRS_MODEL = "EPSG:7791"   # RDN2008/UTM32N — model coordinate space
+CRS_VAL = "EPSG:6707"     # ED50/UTM32N   — CRS baseline for new validation outputs
 
-GRID_SPACING = 200.0  # evaluation grid node spacing (m)
-LINE_STEP = 200.0     # section-line sampling step (m)
-MAPS_STEP = 100.0     # geological-map-contact sampling step (m)
-BUFFER_DIST_M = 50.0  # boundary-overlap tolerance (m)
+GRID_SPACING = 200.0
+LINE_STEP = 200.0
+MAPS_STEP = 100.0
+BUFFER_DIST_M = 50.0
 
 
 def main():
@@ -48,56 +78,95 @@ def main():
         print(f"The folder {WORKING_DIR} does not exist.")
         return None
 
-    ts_path = os.path.join(WORKING_DIR, TS_FILE)
-    surfaces_data = read_gocad_ts_multi(ts_path)
-    surface_names = list(surfaces_data.keys())
-    if not surface_names:
-        print("No surface found in the .ts file.")
+    # --- Load horizon surfaces ---
+    ts_horiz_path = os.path.join(WORKING_DIR, TS_HORIZONS_FILE)
+    surfaces_data = read_gocad_ts_multi(ts_horiz_path, read_thickness=True)
+    if not surfaces_data:
+        print("No surfaces found in the horizons .ts file.")
         return None
-    print(f"Found {len(surface_names)} surfaces: {surface_names}")
 
+    # original/GOCAD_ASCII_All.ts may contain both horizons and faults; separate by prefix
+    horizon_surfaces = {k: v for k, v in surfaces_data.items() if k.upper().startswith('TOP_')}
+    fault_surfaces_from_all = {k: v for k, v in surfaces_data.items() if not k.upper().startswith('TOP_')}
+
+    # Load dedicated faults file if faults not already in the All.ts
+    ts_faults_path = os.path.join(WORKING_DIR, TS_FAULTS_FILE)
+    if os.path.exists(ts_faults_path):
+        faults_data = read_gocad_ts_multi(ts_faults_path)
+        fault_surfaces = {**fault_surfaces_from_all, **faults_data}
+    else:
+        fault_surfaces = fault_surfaces_from_all
+
+    print(f"Horizon surfaces ({len(horizon_surfaces)}): {list(horizon_surfaces.keys())}")
+    print(f"Fault surfaces  ({len(fault_surfaces)}): {list(fault_surfaces.keys())}")
+
+    # --- Load vector data ---
     sections_all = gpd.read_file(os.path.join(WORKING_DIR, SECTIONS_FILE))
     maps_all = gpd.read_file(os.path.join(WORKING_DIR, MAPS_FILE))
     topo_all = gpd.read_file(os.path.join(WORKING_DIR, TOPO_FILE))
-    print(f"Sections: {len(sections_all)} features, Maps: {len(maps_all)} features, "
-          f"Topo intersections: {len(topo_all)} features")
 
-    # Global extents for consistent axes (vertices + sections + maps + topo)
-    all_vert_list = [v for v in surfaces_data.values() if v.get('vertices') is not None and len(v.get('vertices')) > 0]
+    faults_topo = gpd.read_file(os.path.join(WORKING_DIR, FAULTS_TOPO_FILE)).to_crs(CRS_VAL)
+    limiti_orig = gpd.read_file(os.path.join(WORKING_DIR, LIMITI_ORIG_FILE))
+    faglie_gdf = gpd.read_file(os.path.join(WORKING_DIR, FAGLIE_FILE))   # native EPSG:6707
+    giaciture_gdf = gpd.read_file(os.path.join(WORKING_DIR, GIACITURE_FILE))  # native EPSG:6707
+
+    tipo_col = 'Tipo' if 'Tipo' in limiti_orig.columns else None
+    if tipo_col:
+        tipo = limiti_orig[tipo_col].astype(str).str.lower()
+        is_tectonic = tipo.str.contains('tettonic', na=False) & ~tipo.str.contains('non tettonic', na=False)
+        tectonic_gdf = limiti_orig[is_tectonic].to_crs(CRS_VAL)
+    else:
+        tectonic_gdf = gpd.GeoDataFrame()
+
+    print(f"Sections: {len(sections_all)}, Maps: {len(maps_all)}, "
+          f"Topo: {len(topo_all)}, FaultTopo: {len(faults_topo)}, "
+          f"TectonicContacts: {len(tectonic_gdf)}, "
+          f"Faglie: {len(faglie_gdf)}, Giaciture: {len(giaciture_gdf)}")
+
+    # --- Global extents ---
+    all_vert_list = [v for v in horizon_surfaces.values()
+                     if v.get('vertices') is not None and len(v['vertices']) > 0]
     all_xyz = np.vstack([v['vertices'] for v in all_vert_list])
     global_xmin, global_ymin = np.min(all_xyz[:, :2], axis=0)
     global_xmax, global_ymax = np.max(all_xyz[:, :2], axis=0)
 
     for gdf in (sections_all, maps_all, topo_all):
         if gdf is not None and not gdf.empty:
-            bounds = gdf.geometry.bounds
-            global_xmin = min(global_xmin, bounds.minx.min())
-            global_xmax = max(global_xmax, bounds.maxx.max())
-            global_ymin = min(global_ymin, bounds.miny.min())
-            global_ymax = max(global_ymax, bounds.maxy.max())
+            b = gdf.geometry.bounds
+            global_xmin = min(global_xmin, b.minx.min())
+            global_xmax = max(global_xmax, b.maxx.max())
+            global_ymin = min(global_ymin, b.miny.min())
+            global_ymax = max(global_ymax, b.maxy.max())
 
     global_xlim = (global_xmin, global_xmax)
     global_ylim = (global_ymin, global_ymax)
+    study_bbox = (global_xmin, global_ymin, global_xmax, global_ymax)
 
+    # --- Per-horizon loop ---
     results = {}
     all_vertices = []
-    overlap_results = []
+    enhanced_overlap_results = []
 
-    for sname, data in surfaces_data.items():
+    for sname, data in horizon_surfaces.items():
         print(f"\n--- Surface: {sname} ---")
         vertices = data.get('vertices')
         triangles = data.get('triangles')
+        thickness = data.get('thickness')
         if vertices is None or len(vertices) == 0:
-            print("No vertices for this surface, skipping.")
+            print("  No vertices, skipping.")
             continue
         all_vertices.append(vertices)
+
+        maps_for_surface = select_map_lines_strat(maps_all, sname)
+        print(f"  Map contacts matched (strat): {len(maps_for_surface)} features")
 
         acc_outputs = generate_accuracy_outputs(
             vertices, None, sections_all, OUTPUT_DIR,
             use_wells=False, use_sections=True,
             use_maps=True, maps_shp=maps_all, maps_step=MAPS_STEP,
             grid_spacing=GRID_SPACING, line_step=LINE_STEP, surface_name=sname,
-            xlim=global_xlim, ylim=global_ylim, crs_proj=CRS
+            xlim=global_xlim, ylim=global_ylim, crs_proj=CRS_MODEL,
+            maps_lines_prefiltered=maps_for_surface,
         )
 
         vert_outputs = None
@@ -106,46 +175,82 @@ def main():
                 vertices, triangles, None, sections_all,
                 acc_outputs.get('grid_points'), acc_outputs.get('GX'), acc_outputs.get('GY'),
                 acc_outputs.get('mask'), OUTPUT_DIR, sname, idw_power=2,
-                topo_shp=topo_all, xlim=global_xlim, ylim=global_ylim, crs_proj=CRS
+                topo_shp=topo_all, xlim=global_xlim, ylim=global_ylim, crs_proj=CRS_MODEL
             )
             if vert_outputs:
-                print(f"Vertical confidence calculated with {vert_outputs.get('samples', 0)} checkpoints "
-                      f"({vert_outputs.get('samples_topo', 0)} from topo intersections).")
+                print(f"  Vertical: {vert_outputs.get('samples', 0)} checkpoints "
+                      f"({vert_outputs.get('samples_topo', 0)} from topo).")
         except Exception as e:
-            print(f"Error during vertical confidence computation: {e}")
+            print(f"  Error in vertical confidence: {e}")
 
         combined_outputs = None
         if vert_outputs is not None:
             combined_outputs = generate_combined_confidence(
-                acc_outputs, vert_outputs, OUTPUT_DIR, sname, crs_proj=CRS, alpha=0.5, mode="min"
+                acc_outputs, vert_outputs, OUTPUT_DIR, sname,
+                crs_proj=CRS_MODEL, alpha=0.5, mode="min"
             )
 
-        overlap = None
+        overlap_result = None
         try:
-            overlap = generate_boundary_overlap_outputs(
-                topo_all, maps_all, sname, OUTPUT_DIR,
-                buffer_dist=BUFFER_DIST_M, xlim=global_xlim, ylim=global_ylim
+            overlap_result = generate_enhanced_boundary_overlap(
+                topo_all, maps_for_surface, sname, OUTPUT_DIR,
+                buffer_dist=BUFFER_DIST_M, xlim=global_xlim, ylim=global_ylim,
             )
-            if overlap:
-                print(f"Boundary overlap: {overlap['overlap_pct']:.1f}% of topo-intersection trace "
-                      f"within {BUFFER_DIST_M:.0f} m of the mapped boundary.")
-                overlap_results.append(overlap)
-            else:
-                print("Boundary overlap: skipped (no matching topo/map lines for this surface).")
+            if overlap_result:
+                print(f"  Boundary overlap A→B: {overlap_result['overlap_pct_topo_in_map']:.1f}%  "
+                      f"B→A: {overlap_result['overlap_pct_map_in_topo']:.1f}%  "
+                      f"P95: {overlap_result['p95_distance_m']:.0f} m")
+                enhanced_overlap_results.append(overlap_result)
         except Exception as e:
-            print(f"Error during boundary overlap computation: {e}")
+            print(f"  Error in enhanced boundary overlap: {e}")
+            import traceback; traceback.print_exc()
+
+        fault_throw_out = None
+        try:
+            gp = acc_outputs.get('grid_points')
+            GX = acc_outputs.get('GX')
+            GY = acc_outputs.get('GY')
+            mask = acc_outputs.get('mask')
+            if gp is not None and fault_surfaces:
+                fault_throw_out = compute_fault_throw_per_horizon(
+                    vertices, fault_surfaces, OUTPUT_DIR, sname,
+                    gp, GX, GY, mask,
+                    offset_m=100, crs_proj=CRS_MODEL,
+                    xlim=global_xlim, ylim=global_ylim,
+                )
+                if fault_throw_out:
+                    print(f"  Fault throw impact: {len(fault_throw_out['throw_sample_values'])} "
+                          f"sample points, mean={np.nanmean(fault_throw_out['throw_sample_values']):.1f} m")
+        except Exception as e:
+            print(f"  Error in fault throw per horizon: {e}")
+            import traceback; traceback.print_exc()
+
+        # acc_outputs['grid_points'] is already the masked subset
+        gp_masked = acc_outputs.get('grid_points')
+        thickness_at_grid = None
+        if gp_masked is not None:
+            try:
+                thickness_at_grid = compute_unit_thickness_at_grid(
+                    vertices, thickness, gp_masked
+                )
+                valid_t = thickness_at_grid[~np.isnan(thickness_at_grid)] if thickness_at_grid is not None and len(thickness_at_grid) > 0 else []
+                if len(valid_t) > 0:
+                    print(f"  Unit thickness at grid: mean={np.nanmean(valid_t):.1f} m")
+                else:
+                    print("  Unit thickness: not available (Thickness property absent in original .ts files)")
+            except Exception as e:
+                print(f"  Error in thickness interpolation: {e}")
 
         try:
-            visualize_data(vertices, triangles, None, sections_all, apply_smoothing=False,
-                           smoothing_iterations=3, smoothing_factor=0.2, crs=CRS,
-                           output_filename=f'model_dataset_{sname}.png',
-                           grid_points=acc_outputs.get('grid_points'), surface_name=sname, show_plot=False,
-                           xlim=global_xlim, ylim=global_ylim, output_dir=OUTPUT_DIR)
-            print("Visualization completed successfully.")
+            visualize_data(
+                vertices, triangles, None, sections_all, apply_smoothing=False,
+                smoothing_iterations=3, smoothing_factor=0.2, crs=CRS_MODEL,
+                output_filename=f'model_dataset_{sname}.png',
+                grid_points=acc_outputs.get('grid_points'), surface_name=sname,
+                show_plot=False, xlim=global_xlim, ylim=global_ylim, output_dir=OUTPUT_DIR
+            )
         except Exception as e:
-            print(f"Error during visualization: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  Visualization error: {e}")
 
         results[sname] = {
             'vertices': vertices,
@@ -154,29 +259,59 @@ def main():
             'horizontal_weights': acc_outputs.get('weights'),
             'vertical_confidence': vert_outputs,
             'combined_confidence': combined_outputs,
-            'boundary_overlap': overlap,
+            'overlap_result': overlap_result,
+            'thickness_at_grid': thickness_at_grid,
+            'vert_outputs': vert_outputs,
         }
 
+    # --- Combined model footprint ---
     if all_vertices:
         try:
-            all_vertices_arr = np.vstack(all_vertices)
-            visualize_data(all_vertices_arr, None, None, sections_all, apply_smoothing=False,
-                           smoothing_iterations=0, smoothing_factor=0.0, crs=CRS,
-                           output_filename='model_dataset.png', grid_points=None,
-                           surface_name='model', show_plot=False,
-                           xlim=global_xlim, ylim=global_ylim, output_dir=OUTPUT_DIR)
-            print("Combined visualization saved (model_dataset.png).")
+            visualize_data(
+                np.vstack(all_vertices), None, None, sections_all, apply_smoothing=False,
+                smoothing_iterations=0, smoothing_factor=0.0, crs=CRS_MODEL,
+                output_filename='model_dataset.png', grid_points=None,
+                surface_name='model', show_plot=False,
+                xlim=global_xlim, ylim=global_ylim, output_dir=OUTPUT_DIR
+            )
         except Exception as e:
-            print(f"Error during combined visualization: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Combined visualization error: {e}")
 
-    if overlap_results:
+    # --- Boundary overlap summary ---
+    if enhanced_overlap_results:
         summary_path = os.path.join(OUTPUT_DIR, 'boundary_overlap_summary.csv')
-        pd.DataFrame(overlap_results).to_csv(summary_path, index=False)
-        print(f"\nWrote {summary_path} with {len(overlap_results)} rows.")
+        pd.DataFrame(enhanced_overlap_results).to_csv(summary_path, index=False)
+        print(f"\nWrote {summary_path} ({len(enhanced_overlap_results)} rows)")
 
-    print("\nAnalysis completed.")
+    # --- Fault validation ---
+    print("\n--- Fault validation ---")
+    try:
+        generate_fault_validation_outputs(
+            faults_topo, tectonic_gdf, OUTPUT_DIR, buffer_dists=(25, 50, 100)
+        )
+    except Exception as e:
+        print(f"Error in fault validation: {e}")
+        import traceback; traceback.print_exc()
+
+    # --- Fault throw qualitative comparison ---
+    print("\n--- Fault throw comparison ---")
+    try:
+        generate_fault_throw_comparison(
+            fault_surfaces, faglie_gdf, giaciture_gdf, study_bbox, OUTPUT_DIR
+        )
+    except Exception as e:
+        print(f"Error in fault throw comparison: {e}")
+        import traceback; traceback.print_exc()
+
+    # --- Acceptance table ---
+    print("\n--- Acceptance table ---")
+    try:
+        generate_acceptance_table(results, OUTPUT_DIR)
+    except Exception as e:
+        print(f"Error in acceptance table: {e}")
+        import traceback; traceback.print_exc()
+
+    print("\nAnalysis completed (original).")
     return results
 
 

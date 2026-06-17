@@ -78,26 +78,34 @@ def read_gocad_ts(file_path):
     return vertices_array, triangles_array
 
 
-def read_gocad_ts_multi(file_path):
+def read_gocad_ts_multi(file_path, read_thickness=False):
     """
     Read a GOCAD .ts file with multiple surfaces and return a dict:
     {surface_name: {'vertices': np.array, 'triangles': np.array}}
+
+    If read_thickness=True, also return 'thickness': np.array (NaN where NO_DATA=1e-30).
+    Thickness is stored in PVRTX column 5 (index after X/Y/Z).
     """
     surfaces = {}
     vertices = []
     triangles = []
+    thicknesses = []
     id_map = {}
     surface_name = None
 
     def commit():
-        nonlocal vertices, triangles, id_map, surface_name
+        nonlocal vertices, triangles, thicknesses, id_map, surface_name
         if surface_name and vertices:
-            surfaces[surface_name] = {
+            entry = {
                 'vertices': np.array(vertices),
                 'triangles': np.array(triangles) if triangles else np.array([])
             }
+            if read_thickness:
+                entry['thickness'] = np.array(thicknesses, dtype=float) if thicknesses else None
+            surfaces[surface_name] = entry
         vertices = []
         triangles = []
+        thicknesses = []
         id_map = {}
 
     try:
@@ -123,6 +131,11 @@ def read_gocad_ts_multi(file_path):
                     x, y, z = float(parts[2]), float(parts[3]), float(parts[4])
                     id_map[idx] = len(vertices)
                     vertices.append([x, y, z])
+                    if read_thickness and s.startswith('PVRTX') and len(parts) >= 6:
+                        t = float(parts[5])
+                        thicknesses.append(np.nan if abs(t - 1e-30) < 1e-25 else t)
+                    elif read_thickness:
+                        thicknesses.append(np.nan)
                 except Exception:
                     continue
         elif s.startswith('TRGL'):
@@ -665,7 +678,8 @@ def generate_accuracy_outputs(vertices, wells_shp, sections_shp, output_dir,
                               use_wells=True, use_sections=True,
                               grid_spacing=5000, line_step=2000, surface_name='surface',
                               xlim=None, ylim=None, crs_proj=None,
-                              use_maps=False, maps_shp=None, maps_step=2000):
+                              use_maps=False, maps_shp=None, maps_step=2000,
+                              maps_lines_prefiltered=None):
     """
     Compute horizontal confidence weights (IDW) and distance distributions.
     Saves CSV/PNG/HTML in output_dir.
@@ -684,8 +698,11 @@ def generate_accuracy_outputs(vertices, wells_shp, sections_shp, output_dir,
         lx, ly = sample_lines_gdf(sections_shp, step=line_step)
         if len(lx) > 0:
             sections_points = np.c_[lx, ly]
-    if use_maps and maps_shp is not None and not maps_shp.empty:
-        maps_lines = select_map_lines_for_surface(maps_shp, surface_name)
+    if use_maps and (maps_lines_prefiltered is not None or (maps_shp is not None and not maps_shp.empty)):
+        if maps_lines_prefiltered is not None:
+            maps_lines = maps_lines_prefiltered
+        else:
+            maps_lines = select_map_lines_for_surface(maps_shp, surface_name)
         if maps_lines is not None and not maps_lines.empty:
             mx, my, reliability_vals = [], [], []
             for _, row in maps_lines.iterrows():

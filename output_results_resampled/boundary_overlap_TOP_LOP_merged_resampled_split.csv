@@ -1,0 +1,2 @@
+surface,topo_length_m,map_length_m,covered_length_m,overlap_pct_topo_in_map,overlap_pct_map_in_topo,mean_distance_m,median_distance_m,p95_distance_m,max_distance_m,buffer_dist_m,n_map_features,n_topo_features
+TOP_LOP_merged_resampled_split,28429.019158981635,11303.782356046653,11739.64719465128,41.29459102686752,95.40051631572643,438.41731735683805,143.17444978784042,1688.9196715162457,2036.5587839911068,50.0,34,79

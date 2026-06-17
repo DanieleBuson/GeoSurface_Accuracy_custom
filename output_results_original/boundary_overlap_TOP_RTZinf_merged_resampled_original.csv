@@ -1,2 +1,2 @@
-surface,topo_length_m,map_length_m,covered_length_m,overlap_pct,buffer_dist_m,n_map_features,n_topo_features
-TOP_RTZinf_merged_resampled_original,16816.93389966404,11305.732423888441,0.0,0.0,50.0,34,1
+surface,topo_length_m,map_length_m,covered_length_m,overlap_pct_topo_in_map,overlap_pct_map_in_topo,mean_distance_m,median_distance_m,p95_distance_m,max_distance_m,buffer_dist_m,n_map_features,n_topo_features
+TOP_RTZinf_merged_resampled_original,16816.93389966404,14087.522783711853,13711.920181016434,81.53638625701183,90.69378073247034,47.40323533551887,11.178650873721853,198.68122382165615,904.4544664144239,50.0,53,1
