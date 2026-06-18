@@ -7,16 +7,17 @@ plus the sub-TOPO-only split/ horizon and fault surfaces.
 Key changes vs the original pipeline:
   - .ts source: split/GOCAD_ASCII_All.ts (horizons + faults, below TOPO only)
   - Stratigraphic contact matching: STRAT_MAP translation (Base_X → correct surface)
-  - Enhanced boundary overlap: bidirectional A↔B, mean/median/P95/max distance
+  - Boundary overlap: single dissolved MOVE line vs single dissolved GIS line, overlap_pct only
   - Fault throw impact layer per horizon (IDW proxy)
-  - Fault trace validation vs mapped tectonic contacts
+  - Fault trace validation: dissolved MOVE faults vs dissolved GIS faults (Faglie_carta_geologica_DEF,
+    grouped by Nome_fagli), overlap_pct only
   - Fault throw qualitative comparison (model vs Faglie/Giaciture)
-  - Per-surface acceptance classification using PVRTX Thickness property
+  - Per-surface acceptance classification (driven by overlap_pct only)
 
-CRS baseline: EPSG:6707 (ED50/UTM32N) for all new spatial comparisons.
-Faglie_carta_geologica_DEF.shp and Giaciture_FB.shp are natively EPSG:6707.
-Other vector data (loaded in EPSG:7791) is reprojected to EPSG:6707 before
-being passed to custom_validation functions.
+CRS baseline: EPSG:6707 (RDN2008/UTM32N) for every layer in this pipeline. Some shapefiles
+were previously tagged with a different (but numerically identical) UTM32N authority code;
+`files_utils.standardize_crs` re-tags/reprojects every layer to EPSG:6707 right after loading
+so nothing downstream needs to special-case CRS.
 
 Outputs are written to ./output_results_resampled/.
 """
@@ -31,6 +32,7 @@ from custom_utils import (
     generate_vertical_outputs,
     generate_combined_confidence,
     visualize_data,
+    standardize_crs,
 )
 from custom_validation import (
     STRAT_MAP,
@@ -53,15 +55,13 @@ OUTPUT_DIR = "output_results_resampled"
 TS_FILE = os.path.join("split", "GOCAD_ASCII_All.ts")
 
 SECTIONS_FILE = "3D_SectionsGrid.shp"
-MAPS_FILE = "Limiti_CartaGeol_rsmpl_0.1.shp"          # stratigraphic contacts (resampled)
-TOPO_FILE = "3D_Topo_Intersections_rsmpl_0.1.shp"     # horizon topo-intersections
+MAPS_FILE = "Limiti_stratigrafici_carta_geologica_DEF.shp"  # sole GIS source for stratigraphic contacts
+TOPO_FILE = "3D_Topo_Intersections_rsmpl_0.1.shp"     # horizon topo-intersections (resampled)
 FAULTS_TOPO_FILE = "3D_Topo_Intersections_Faults_rsmpl_0.1.shp"
-LIMITI_ORIG_FILE = "Limiti_CartaGeol.shp"              # tectonic contacts (only non-resampled has them)
-FAGLIE_FILE = "Faglie_carta_geologica_DEF.shp"         # native EPSG:6707
-GIACITURE_FILE = "Giaciture_FB.shp"                   # native EPSG:6707
+FAGLIE_FILE = "Faglie_carta_geologica_DEF.shp"        # sole GIS source for faults
+GIACITURE_FILE = "Giaciture_FB.shp"
 
-CRS_MODEL = "EPSG:7791"   # RDN2008/UTM32N — model coordinate space
-CRS_VAL = "EPSG:6707"     # ED50/UTM32N   — CRS baseline for new validation outputs
+CRS_MODEL = "EPSG:6707"   # RDN2008/UTM32N — single CRS baseline for the whole pipeline
 
 GRID_SPACING = 200.0
 LINE_STEP = 200.0
@@ -117,28 +117,17 @@ def main():
     print(f"Horizon surfaces ({len(horizon_surfaces)}): {list(horizon_surfaces.keys())}")
     print(f"Fault surfaces  ({len(fault_surfaces)}): {list(fault_surfaces.keys())}")
 
-    # --- Load vector data ---
-    sections_all = gpd.read_file(os.path.join(WORKING_DIR, SECTIONS_FILE))
-    maps_all = gpd.read_file(os.path.join(WORKING_DIR, MAPS_FILE))
-    topo_all = gpd.read_file(os.path.join(WORKING_DIR, TOPO_FILE))
+    # --- Load vector data, standardized to EPSG:6707 ---
+    sections_all = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, SECTIONS_FILE)))
+    maps_all = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, MAPS_FILE)))
+    topo_all = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, TOPO_FILE)))
 
-    faults_topo = gpd.read_file(os.path.join(WORKING_DIR, FAULTS_TOPO_FILE)).to_crs(CRS_VAL)
-    limiti_orig = gpd.read_file(os.path.join(WORKING_DIR, LIMITI_ORIG_FILE))
-    faglie_gdf = gpd.read_file(os.path.join(WORKING_DIR, FAGLIE_FILE))   # native EPSG:6707
-    giaciture_gdf = gpd.read_file(os.path.join(WORKING_DIR, GIACITURE_FILE))  # native EPSG:6707
-
-    # Tectonic contacts for fault validation (in EPSG:6707 for comparison with faults_topo)
-    tipo_col = 'Tipo' if 'Tipo' in limiti_orig.columns else None
-    if tipo_col:
-        tipo = limiti_orig[tipo_col].astype(str).str.lower()
-        is_tectonic = tipo.str.contains('tettonic', na=False) & ~tipo.str.contains('non tettonic', na=False)
-        tectonic_gdf = limiti_orig[is_tectonic].to_crs(CRS_VAL)
-    else:
-        tectonic_gdf = gpd.GeoDataFrame()
+    faults_topo = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, FAULTS_TOPO_FILE)))
+    faglie_gdf = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, FAGLIE_FILE)))
+    giaciture_gdf = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, GIACITURE_FILE)))
 
     print(f"Sections: {len(sections_all)}, Maps: {len(maps_all)}, "
           f"Topo: {len(topo_all)}, FaultTopo: {len(faults_topo)}, "
-          f"TectonicContacts: {len(tectonic_gdf)}, "
           f"Faglie: {len(faglie_gdf)}, Giaciture: {len(giaciture_gdf)}")
 
     # --- Global extents (from all horizon vertices) ---
@@ -217,9 +206,7 @@ def main():
                 buffer_dist=BUFFER_DIST_M, xlim=global_xlim, ylim=global_ylim,
             )
             if overlap_result:
-                print(f"  Boundary overlap A→B: {overlap_result['overlap_pct_topo_in_map']:.1f}%  "
-                      f"B→A: {overlap_result['overlap_pct_map_in_topo']:.1f}%  "
-                      f"P95: {overlap_result['p95_distance_m']:.0f} m")
+                print(f"  Boundary overlap_pct: {overlap_result['overlap_pct']:.1f}%")
                 enhanced_overlap_results.append(overlap_result)
         except Exception as e:
             print(f"  Error in enhanced boundary overlap: {e}")
@@ -308,7 +295,7 @@ def main():
     print("\n--- Fault validation ---")
     try:
         generate_fault_validation_outputs(
-            faults_topo, tectonic_gdf, OUTPUT_DIR, buffer_dists=(25, 50, 100)
+            faults_topo, faglie_gdf, OUTPUT_DIR, buffer_dist=BUFFER_DIST_M
         )
     except Exception as e:
         print(f"Error in fault validation: {e}")

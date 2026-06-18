@@ -3,27 +3,29 @@ custom_validation.py — extended geological validation for the Trentino 7-surfa
 
 New functions called by both run_accuracy_original.py and run_accuracy_resampled.py:
   - select_map_lines_strat       : corrected stratigraphic contact matching
-  - generate_enhanced_boundary_overlap : bidirectional A↔B overlap + distance stats
+  - generate_enhanced_boundary_overlap : single-geometry MOVE vs GIS overlap_pct
   - compute_fault_throw_per_horizon    : IDW fault-throw-impact layer per horizon
-  - generate_fault_validation_outputs  : model fault traces vs mapped tectonic contacts
+  - generate_fault_validation_outputs  : dissolved MOVE faults vs dissolved GIS faults
   - generate_fault_throw_comparison    : qualitative modeled vs observed throw table
   - compute_unit_thickness_at_grid     : interpolate PVRTX Thickness onto eval grid
   - compute_acceptance_class           : single-surface acceptance classification
   - generate_acceptance_table          : aggregate table + model-level summary
 
-CRS baseline: EPSG:6707 (ED50/UTM32N).  Faglie/Giaciture shapefiles are natively
-EPSG:6707 and must NOT be reprojected.  All other vector data (loaded in EPSG:7791)
-must be converted to EPSG:6707 before calling functions in this module.
+CRS baseline: EPSG:6707 (RDN2008/UTM32N) for every layer used by this module — callers
+must standardize all GeoDataFrames to EPSG:6707 (see `files_utils.standardize_crs`)
+before calling functions here. No layer in this dataset is exempt or kept in a
+different CRS.
 """
 import os
+import re
 import warnings
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import matplotlib
 import matplotlib.pyplot as plt
-from shapely.ops import unary_union, nearest_points
-from shapely.geometry import LineString, MultiLineString
-from scipy.spatial import cKDTree
+import matplotlib.cm as cm
+from shapely.ops import unary_union, linemerge
 from scipy.interpolate import LinearNDInterpolator
 
 from files_utils import (
@@ -33,6 +35,7 @@ from files_utils import (
     _drop_z,
     _line_parts_xy,
     _idw_from_points,
+    dissolve_lines_by_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -64,6 +67,26 @@ def _throw_class_label(throw_m):
             hi_str = f'{hi:.0f}' if hi < float('inf') else '+'
             return f'{lo:.0f}–{hi_str} m'
     return f'< {THROW_CLASSES[0][0]:.0f} m'
+
+
+def _normalize_fault_id(text):
+    """
+    Normalize a fault identifier to a common key comparable between the GIS dissolve
+    field ('Nome_fagli', e.g. '8a') and the MOVE topo-intersection 'Name' field
+    (e.g. 'F8a') -> both become '8A'.
+    """
+    s = str(text).strip().upper()
+    s = re.sub(r'^F', '', s)
+    s = re.sub(r'[^A-Z0-9]', '', s)
+    return s
+
+
+def _fault_sort_key(fault_id):
+    """Natural sort key for fault ids like '1', '8A', '9B', '10' -> numeric-then-letter order."""
+    m = re.match(r'^(\d+)([A-Z]*)$', fault_id)
+    if not m:
+        return (999, fault_id)
+    return (int(m.group(1)), m.group(2))
 
 
 # ---------------------------------------------------------------------------
@@ -117,24 +140,22 @@ def select_map_lines_strat(maps_gdf, surface_name, strat_map=None):
 def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface_name,
                                        output_dir, buffer_dist=50.0, xlim=None, ylim=None):
     """
-    Enhanced boundary-overlap metric (replaces generate_boundary_overlap_outputs for the
-    updated pipelines).
+    Single-geometry boundary-overlap metric: dissolves every MOVE topo-intersection segment
+    for this formation into one continuous line, and every GIS stratigraphic-contact segment
+    (already formation-filtered by `select_map_lines_strat`) into one continuous line, then
+    computes a single one-directional overlap ratio:
+
+        overlap_pct = 100 * length(intersection(gis_line.buffer(buffer_dist), move_line))
+                          / length(move_line)
 
     Inputs:
       topo_shp              : full 3D_Topo_Intersections GeoDataFrame (all surfaces)
       maps_lines_prefiltered: already-filtered map contact GeoDataFrame for this surface
                               (from select_map_lines_strat); must be in the same CRS as topo_shp
 
-    Additional metrics vs the original:
-      - overlap_pct_topo_in_map  : % of topo line inside buffer of mapped contact (A→B)
-      - overlap_pct_map_in_topo  : % of mapped contact inside buffer of topo line (B→A)
-      - mean/median/p95/max distance from topo vertices to nearest map point
-
     Writes boundary_overlap_<surface>.csv and .png to output_dir.
-    Returns a dict of all metrics, or None if geometry is missing.
+    Returns a dict of metrics, or None if geometry is missing.
     """
-    from shapely.ops import unary_union
-
     os.makedirs(output_dir, exist_ok=True)
 
     topo_lines = select_topo_lines_for_surface(topo_shp, surface_name)
@@ -150,59 +171,23 @@ def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface
         print(f"  Enhanced boundary overlap skipped for {surface_name}: empty geometries.")
         return None
 
-    map_union = unary_union(map_geoms)
-    topo_union = unary_union(topo_geoms)
+    move_line = linemerge(unary_union(topo_geoms))
+    gis_line = linemerge(unary_union(map_geoms))
 
-    # A→B: % of topo inside buffer of mapped contact
-    map_buffer = map_union.buffer(buffer_dist)
-    covered_topo = 0.0
-    total_topo = 0.0
-    for g in topo_geoms:
-        total_topo += g.length
-        covered_topo += g.intersection(map_buffer).length
-
-    # B→A: % of mapped contact inside buffer of topo line
-    topo_buffer = topo_union.buffer(buffer_dist)
-    covered_map = 0.0
-    total_map = 0.0
-    for g in map_geoms:
-        total_map += g.length
-        covered_map += g.intersection(topo_buffer).length
-
-    overlap_pct_a = 100.0 * covered_topo / total_topo if total_topo > 0 else np.nan
-    overlap_pct_b = 100.0 * covered_map / total_map if total_map > 0 else np.nan
-
-    # Distance statistics: for each topo vertex, distance to nearest point on map union
-    distances = []
-    from shapely.geometry import Point as ShapelyPoint
-    for g in topo_geoms:
-        # Handle both LineString and MultiLineString
-        for xarr, yarr in _line_parts_xy(g):
-            for x, y in zip(xarr, yarr):
-                pt = ShapelyPoint(x, y)
-                _, near = nearest_points(pt, map_union)
-                distances.append(pt.distance(near))
-
-    distances = np.array(distances)
-    mean_dist = float(np.nanmean(distances)) if len(distances) > 0 else np.nan
-    median_dist = float(np.nanmedian(distances)) if len(distances) > 0 else np.nan
-    p95_dist = float(np.nanpercentile(distances, 95)) if len(distances) > 0 else np.nan
-    max_dist = float(np.nanmax(distances)) if len(distances) > 0 else np.nan
+    gis_buffer = gis_line.buffer(buffer_dist)
+    move_length = move_line.length
+    gis_length = gis_line.length
+    covered_length = move_line.intersection(gis_buffer).length
+    overlap_pct = 100.0 * covered_length / move_length if move_length > 0 else np.nan
 
     result = {
         'surface': surface_name,
-        'topo_length_m': total_topo,
-        'map_length_m': total_map,
-        'covered_length_m': covered_topo,
-        'overlap_pct_topo_in_map': overlap_pct_a,
-        'overlap_pct_map_in_topo': overlap_pct_b,
-        'mean_distance_m': mean_dist,
-        'median_distance_m': median_dist,
-        'p95_distance_m': p95_dist,
-        'max_distance_m': max_dist,
+        'move_length_m': move_length,
+        'gis_length_m': gis_length,
+        'overlap_pct': overlap_pct,
         'buffer_dist_m': buffer_dist,
-        'n_map_features': len(map_geoms),
-        'n_topo_features': len(topo_geoms),
+        'n_move_segments_merged': len(topo_geoms),
+        'n_gis_segments_merged': len(map_geoms),
     }
     pd.DataFrame([result]).to_csv(
         os.path.join(output_dir, f'boundary_overlap_{surface_name}.csv'), index=False
@@ -211,30 +196,24 @@ def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface
     # Plot
     try:
         fig, ax = plt.subplots(figsize=(10, 8))
-        buffer_polys = [map_buffer] if map_buffer.geom_type == 'Polygon' else list(map_buffer.geoms)
-        for i, poly in enumerate(buffer_polys):
+        buffer_polys = [gis_buffer] if gis_buffer.geom_type == 'Polygon' else list(gis_buffer.geoms)
+        for poly in buffer_polys:
             bx, by = poly.exterior.xy
-            ax.fill(bx, by, color='orange', alpha=0.2,
-                    label=f'Map buffer ({buffer_dist:.0f} m)' if i == 0 else None)
+            ax.fill(bx, by, color='orange', alpha=0.15)
             for interior in poly.interiors:
                 ix, iy = interior.xy
                 ax.fill(ix, iy, color='white', alpha=1.0)
-        for i, g in enumerate(map_geoms):
-            for x, y in _line_parts_xy(g):
-                ax.plot(x, y, color='darkorange', linewidth=2,
-                        label='Mapped contact (Limiti_CartaGeol)' if i == 0 else None)
-        for i, g in enumerate(topo_geoms):
-            for x, y in _line_parts_xy(g):
-                ax.plot(x, y, color='steelblue', linewidth=2,
-                        label='Model topo-intersection' if i == 0 else None)
-        ax.set_title(
-            f'Boundary overlap — {surface_name}\n'
-            f'A→B: {overlap_pct_a:.1f}%  B→A: {overlap_pct_b:.1f}%  '
-            f'P95 dist: {p95_dist:.0f} m  (buffer {buffer_dist:.0f} m)'
-        )
+        for i, (x, y) in enumerate(_line_parts_xy(gis_line)):
+            ax.plot(x, y, color='darkorange', linewidth=2,
+                    label='GIS mapped' if i == 0 else None)
+        for i, (x, y) in enumerate(_line_parts_xy(move_line)):
+            ax.plot(x, y, color='steelblue', linewidth=2,
+                    label='MOVE interpolated' if i == 0 else None)
+        ax.set_title(f'Boundary overlap — {surface_name}: {overlap_pct:.1f}%'
+                     f' (buffer {buffer_dist:.0f} m)')
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=9)
         if xlim:
             ax.set_xlim(xlim)
         if ylim:
@@ -412,130 +391,107 @@ def compute_fault_throw_per_horizon(horizon_vertices, fault_surfaces_dict,
 # 4. Fault validation (model traces vs mapped tectonic contacts)
 # ---------------------------------------------------------------------------
 
-def generate_fault_validation_outputs(topo_faults_shp, limiti_tectonic_gdf,
-                                      output_dir, buffer_dists=(25, 50, 100)):
+def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
+                                      output_dir, buffer_dist=50.0):
     """
-    Aggregate and per-fault comparison of model fault traces (3D_Topo_Intersections_Faults)
-    against mapped tectonic contacts (from Limiti_CartaGeol filtered to tectonic lines only).
+    Per-fault comparison of MOVE fault traces (3D_Topo_Intersections_Faults, dissolved by
+    'Name') against GIS-mapped faults (Faglie_carta_geologica_DEF, dissolved by 'Nome_fagli').
 
-    Both inputs must be in the same CRS (EPSG:6707) before calling this function.
+    Each side is first collapsed to one geometry per fault entity via `dissolve_lines_by_key`
+    (e.g. all 'Nome_fagli' == '8a' rows -> one merged GIS line for fault 8a), normalized so
+    MOVE's 'F8a' and GIS's '8a' resolve to the same key. Faults present in only one source are
+    skipped (never guessed) and logged. Both inputs must already be in EPSG:6707.
+
+    overlap_pct = 100 * length(intersection(gis_fault.buffer(buffer_dist), move_fault))
+                      / length(move_fault)
 
     Writes:
-      fault_validation_aggregate.csv  — whole-system overlap at 25/50/100 m
-      fault_validation_per_fault.csv  — per model-fault metrics
-      fault_validation_map.png        — map of traces vs contacts
+      fault_validation_aggregate.csv  — single-row model-level summary
+      fault_validation_per_fault.csv  — one row per matched fault entity
+      fault_validation_map.png        — one line per GIS fault + one aggregated line per
+                                         MOVE fault, legend keyed by fault id
     """
     os.makedirs(output_dir, exist_ok=True)
 
     if topo_faults_shp is None or topo_faults_shp.empty:
         print("  Fault validation skipped: no model fault topo-intersection lines.")
         return None
-    if limiti_tectonic_gdf is None or limiti_tectonic_gdf.empty:
-        print("  Fault validation skipped: no mapped tectonic contacts.")
+    if faglie_gdf is None or faglie_gdf.empty:
+        print("  Fault validation skipped: no GIS fault lines (Faglie_carta_geologica_DEF).")
         return None
 
-    map_geoms = [_drop_z(g) for g in limiti_tectonic_gdf.geometry
-                 if g is not None and not g.is_empty]
-    model_geoms = [_drop_z(g) for g in topo_faults_shp.geometry
-                   if g is not None and not g.is_empty]
-    model_names = list(topo_faults_shp.get('Name', topo_faults_shp.get('NAME',
-                        pd.Series(range(len(topo_faults_shp))))).fillna(''))
+    gis_faults = dissolve_lines_by_key(faglie_gdf, 'Nome_fagli', normalize_fn=_normalize_fault_id)
+    move_faults = dissolve_lines_by_key(topo_faults_shp, 'Name', normalize_fn=_normalize_fault_id)
 
-    if not map_geoms or not model_geoms:
-        print("  Fault validation skipped: empty geometries.")
+    if not gis_faults or not move_faults:
+        print("  Fault validation skipped: dissolve produced no fault geometries.")
         return None
 
-    map_union = unary_union(map_geoms)
+    common_ids = sorted(set(gis_faults) & set(move_faults), key=_fault_sort_key)
+    missing_in_gis = sorted(set(move_faults) - set(gis_faults), key=_fault_sort_key)
+    missing_in_move = sorted(set(gis_faults) - set(move_faults), key=_fault_sort_key)
+    if missing_in_gis:
+        print(f"  Faults present in MOVE but not in GIS (skipped): {missing_in_gis}")
+    if missing_in_move:
+        print(f"  Faults present in GIS but not in MOVE (skipped): {missing_in_move}")
 
-    # --- Aggregate metrics ---
-    agg_rows = []
-    for bd in buffer_dists:
-        map_buf = map_union.buffer(bd)
-        model_union = unary_union(model_geoms)
-        model_buf = model_union.buffer(bd)
+    if not common_ids:
+        print("  Fault validation skipped: no fault id matched between MOVE and GIS.")
+        return None
 
-        total_model = sum(g.length for g in model_geoms)
-        covered_model = sum(g.intersection(map_buf).length for g in model_geoms)
-
-        total_map = sum(g.length for g in map_geoms)
-        covered_map = sum(g.intersection(model_buf).length for g in map_geoms)
-
-        agg_rows.append({
-            'buffer_dist_m': bd,
-            'model_total_length_m': total_model,
-            'map_total_length_m': total_map,
-            'overlap_model_in_map_pct': 100 * covered_model / total_model if total_model > 0 else np.nan,
-            'overlap_map_in_model_pct': 100 * covered_map / total_map if total_map > 0 else np.nan,
-        })
-
-    # Overall distance statistics
-    all_dists = []
-    from shapely.geometry import Point as ShapelyPoint
-    for g in model_geoms:
-        for xarr, yarr in _line_parts_xy(g):
-            for cx, cy in zip(xarr, yarr):
-                pt = ShapelyPoint(cx, cy)
-                _, near = nearest_points(pt, map_union)
-                all_dists.append(pt.distance(near))
-    all_dists = np.array(all_dists)
-
-    agg_summary = pd.DataFrame(agg_rows)
-    agg_summary['mean_dist_model_to_map_m'] = np.nanmean(all_dists) if len(all_dists) > 0 else np.nan
-    agg_summary['median_dist_model_to_map_m'] = np.nanmedian(all_dists) if len(all_dists) > 0 else np.nan
-    agg_summary['p95_dist_model_to_map_m'] = np.nanpercentile(all_dists, 95) if len(all_dists) > 0 else np.nan
-    agg_path = os.path.join(output_dir, 'fault_validation_aggregate.csv')
-    agg_summary.to_csv(agg_path, index=False)
-    print(f"  Wrote {agg_path}")
-
-    # --- Per-fault metrics ---
     per_fault_rows = []
-    for i, (g, fname) in enumerate(zip(model_geoms, model_names)):
-        row = {'fault_name': fname, 'model_length_m': g.length}
-        for bd in buffer_dists:
-            map_buf = map_union.buffer(bd)
-            covered = g.intersection(map_buf).length
-            row[f'overlap_pct_{bd}m'] = 100 * covered / g.length if g.length > 0 else np.nan
-
-        dists = []
-        for xarr, yarr in _line_parts_xy(g):
-            for cx, cy in zip(xarr, yarr):
-                pt = ShapelyPoint(cx, cy)
-                _, near = nearest_points(pt, map_union)
-                dists.append(pt.distance(near))
-        dists = np.array(dists)
-        row['mean_dist_m'] = float(np.nanmean(dists))
-        row['median_dist_m'] = float(np.nanmedian(dists))
-        row['p95_dist_m'] = float(np.nanpercentile(dists, 95))
-        row['max_dist_m'] = float(np.nanmax(dists))
-        per_fault_rows.append(row)
+    for fid in common_ids:
+        move_geom = move_faults[fid]
+        gis_geom = gis_faults[fid]
+        gis_buf = gis_geom.buffer(buffer_dist)
+        covered = move_geom.intersection(gis_buf).length
+        overlap_pct = 100 * covered / move_geom.length if move_geom.length > 0 else np.nan
+        per_fault_rows.append({
+            'fault_id': f'Faglia {fid}',
+            'move_length_m': move_geom.length,
+            'gis_length_m': gis_geom.length,
+            'overlap_pct': overlap_pct,
+        })
 
     per_fault_df = pd.DataFrame(per_fault_rows)
     per_path = os.path.join(output_dir, 'fault_validation_per_fault.csv')
     per_fault_df.to_csv(per_path, index=False)
     print(f"  Wrote {per_path}")
 
-    # --- Map plot ---
+    agg_summary = pd.DataFrame([{
+        'n_faults_compared': len(common_ids),
+        'mean_overlap_pct': per_fault_df['overlap_pct'].mean(),
+        'buffer_dist_m': buffer_dist,
+    }])
+    agg_path = os.path.join(output_dir, 'fault_validation_aggregate.csv')
+    agg_summary.to_csv(agg_path, index=False)
+    print(f"  Wrote {agg_path}")
+
+    # --- Map plot: one color per fault id, GIS solid / MOVE dashed, one legend entry per fault ---
     map_png = os.path.join(output_dir, 'fault_validation_map.png')
     try:
         fig, ax = plt.subplots(figsize=(12, 10))
-        for i, g in enumerate(map_geoms):
-            for x, y in _line_parts_xy(g):
-                ax.plot(x, y, color='crimson', linewidth=1.5,
-                        label='Mapped tectonic contacts' if i == 0 else None)
-        for i, g in enumerate(model_geoms):
-            for x, y in _line_parts_xy(g):
-                ax.plot(x, y, color='steelblue', linewidth=2,
-                        label='Model fault topo-intersections' if i == 0 else None)
-        ax.set_title('Fault validation — model traces vs mapped tectonic contacts')
+        try:
+            colors = matplotlib.colormaps['tab20'].resampled(max(len(common_ids), 1))
+        except AttributeError:
+            colors = cm.get_cmap('tab20', max(len(common_ids), 1))
+        for i, fid in enumerate(common_ids):
+            color = colors(i)
+            for j, (x, y) in enumerate(_line_parts_xy(gis_faults[fid])):
+                ax.plot(x, y, color=color, linewidth=2.0, linestyle='-',
+                        label=f'Faglia {fid}' if j == 0 else None)
+            for x, y in _line_parts_xy(move_faults[fid]):
+                ax.plot(x, y, color=color, linewidth=2.0, linestyle='--')
+        ax.set_title('Fault validation — GIS mapped (solid) vs MOVE interpolated (dashed)')
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=7, ncol=2)
         plt.savefig(map_png, dpi=300, bbox_inches='tight')
         plt.close(fig)
+        print(f"  Wrote {map_png}")
     except Exception as e:
         warnings.warn(f"Could not save fault validation map: {e}")
 
-    print(f"  Wrote {map_png}")
     return {'aggregate': agg_summary, 'per_fault': per_fault_df}
 
 
@@ -673,33 +629,24 @@ def compute_unit_thickness_at_grid(horizon_vertices, thickness_arr, grid_points)
 # 7. Acceptance classification
 # ---------------------------------------------------------------------------
 
-def compute_acceptance_class(overlap_pct, p95_distance_m, mean_thickness_m):
+def compute_acceptance_class(overlap_pct):
     """
-    Classify a single surface's validation result.
-
-    Returns (acceptance_class, relative_error_pct) where:
-      relative_error_pct = p95_distance_m / mean_thickness_m * 100
+    Classify a single surface's validation result from `overlap_pct` alone (the only
+    surviving boundary-overlap metric).
 
     Classification rules:
-      Accepted             : overlap >= 70% AND relative_error < 20%
-      Conditionally accepted: overlap >= 50% OR relative_error < 30%
-      Rejected             : otherwise
+      Accepted              : overlap_pct >= 70
+      Conditionally accepted: overlap_pct >= 50
+      Rejected               : overlap_pct < 50
+      No data                : overlap_pct is NaN
     """
-    if mean_thickness_m and not np.isnan(mean_thickness_m) and mean_thickness_m > 0:
-        rel_err = 100.0 * p95_distance_m / mean_thickness_m
-    else:
-        rel_err = np.nan
-
-    if np.isnan(overlap_pct) or np.isnan(p95_distance_m):
-        cls = 'No data'
-    elif overlap_pct >= 70 and (np.isnan(rel_err) or rel_err < 20):
-        cls = 'Accepted'
-    elif overlap_pct >= 50 or (not np.isnan(rel_err) and rel_err < 30):
-        cls = 'Conditionally accepted'
-    else:
-        cls = 'Rejected'
-
-    return cls, rel_err
+    if overlap_pct is None or np.isnan(overlap_pct):
+        return 'No data'
+    if overlap_pct >= 70:
+        return 'Accepted'
+    if overlap_pct >= 50:
+        return 'Conditionally accepted'
+    return 'Rejected'
 
 
 # ---------------------------------------------------------------------------
@@ -728,22 +675,15 @@ def generate_acceptance_table(per_surface_results, output_dir):
         thick = res.get('thickness_at_grid')
         vert = res.get('vert_outputs') or {}
 
-        overlap_pct = ovlp.get('overlap_pct_topo_in_map', np.nan)
-        mean_dist = ovlp.get('mean_distance_m', np.nan)
-        p95_dist = ovlp.get('p95_distance_m', np.nan)
-
+        overlap_pct = ovlp.get('overlap_pct', np.nan)
         mean_thickness = float(np.nanmean(thick)) if thick is not None and len(thick) > 0 else np.nan
 
-        cls, rel_err = compute_acceptance_class(overlap_pct, p95_dist, mean_thickness)
+        cls = compute_acceptance_class(overlap_pct)
 
         rows.append({
             'surface': sname,
-            'overlap_pct_topo_in_map': round(overlap_pct, 1) if not np.isnan(overlap_pct) else np.nan,
-            'overlap_pct_map_in_topo': round(ovlp.get('overlap_pct_map_in_topo', np.nan), 1),
-            'mean_distance_m': round(mean_dist, 1) if not np.isnan(mean_dist) else np.nan,
-            'p95_distance_m': round(p95_dist, 1) if not np.isnan(p95_dist) else np.nan,
+            'overlap_pct': round(overlap_pct, 1) if not np.isnan(overlap_pct) else np.nan,
             'mean_unit_thickness_m': round(mean_thickness, 1) if not np.isnan(mean_thickness) else np.nan,
-            'relative_error_pct': round(rel_err, 1) if not np.isnan(rel_err) else np.nan,
             'acceptance_class': cls,
             'n_vertical_checkpoints': vert.get('samples', 0),
         })
@@ -756,7 +696,7 @@ def generate_acceptance_table(per_surface_results, output_dir):
     # Global summary
     n_total = len(df)
     counts = df['acceptance_class'].value_counts().to_dict()
-    valid_overlaps = df['overlap_pct_topo_in_map'].dropna()
+    valid_overlaps = df['overlap_pct'].dropna()
     summary = {
         'n_surfaces': n_total,
         'n_accepted': counts.get('Accepted', 0),

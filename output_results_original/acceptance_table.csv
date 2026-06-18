@@ -1,8 +1,8 @@
-surface,overlap_pct_topo_in_map,overlap_pct_map_in_topo,mean_distance_m,p95_distance_m,mean_unit_thickness_m,relative_error_pct,acceptance_class,n_vertical_checkpoints
-TOP_ARV_merged_resampledoriginal,66.3,97.3,85.4,384.3,24.8,1551.4,Conditionally accepted,3572
-TOP_DPR_merged_resampledoriginal,29.9,100.0,1660.8,4146.5,1343.8,308.6,Rejected,8448
-TOP_LOP_merged_resampled_original,41.3,95.4,434.5,1671.6,43.6,3837.1,Rejected,12830
-TOP_RTZinf_merged_resampled_original,81.5,90.7,47.4,198.7,153.6,129.3,Conditionally accepted,7572
-TOP_FMZ_merged_resampled_original,50.2,95.9,344.7,1285.9,223.2,576.2,Conditionally accepted,11747
-TOP_RTZsup_merged_resampledoriginal,78.1,100.0,51.2,276.5,136.5,202.6,Conditionally accepted,5407
-TOP_OSV_merged_resampledoriginal,73.0,97.8,60.1,415.9,39.8,1045.0,Conditionally accepted,5740
+surface,overlap_pct,mean_unit_thickness_m,acceptance_class,n_vertical_checkpoints
+TOP_ARV_merged_resampledoriginal,66.3,24.8,Conditionally accepted,3572
+TOP_DPR_merged_resampledoriginal,29.9,1343.8,Rejected,8448
+TOP_LOP_merged_resampled_original,41.3,43.6,Rejected,12830
+TOP_RTZinf_merged_resampled_original,81.5,153.6,Accepted,7572
+TOP_FMZ_merged_resampled_original,50.2,223.2,Conditionally accepted,11747
+TOP_RTZsup_merged_resampledoriginal,78.1,136.5,Accepted,5407
+TOP_OSV_merged_resampledoriginal,73.0,39.8,Accepted,5740

@@ -1,2 +1,2 @@
 n_surfaces,n_accepted,n_conditionally_accepted,n_rejected,n_no_data,mean_overlap_pct,min_overlap_pct
-7,0,5,2,0,60.0,29.9
+7,3,2,2,0,60.0,29.9

@@ -22,15 +22,24 @@ All inputs live in [`working_files_folder/`](./working_files_folder/):
 | `3D_Topo_Intersections.shp` / `3D_Topo_Intersections_rsmpl_0.1.shp` | 7 / 231 features — per surface, the 3D line where that surface **as computed by the modeling software** crops out at the topography (field `Horizon` = `TOP_ARV`, `TOP_DPR`, ...). Geometry Z = DEM elevation. |
 | `Limiti_CartaGeol.shp` / `Limiti_CartaGeol_rsmpl_0.1.shp` | 417 / 194 features — **independently, explicitly digitized** geological-map contact lines (from field mapping / GIS), with `Base_di` (links a contact to a surface, e.g. `Base ARV`, `Base RTZ inf`), `Tipo` (tectonic vs non-tectonic/stratigraphic contact), and `Affidabili` (reliability: `Osservato`/`Dedotto`/`Ipotizzato`/`Coperto`) |
 
+> **Note (current pipeline):** `run_accuracy_original.py`/`run_accuracy_resampled.py` (and the
+> matching notebooks) now read stratigraphic contacts exclusively from
+> `Limiti_stratigrafici_carta_geologica_DEF.shp` (456 features, same schema as
+> `Limiti_CartaGeol`) and faults from `Faglie_carta_geologica_DEF.shp` (dissolved by
+> `Nome_fagli`) plus `3D_Topo_Intersections_Faults(.shp)`/`GOCAD_ASCII_Faults.ts` — this section
+> describes an earlier dataset snapshot; see the script docstrings for the authoritative current
+> file list and CRS handling.
+
 There are **no well shapefiles** in this dataset, so `use_wells=False` everywhere.
 
 ## CRS
 
-All shapefiles and the `.ts` model use the same projected meters, treated as
-**`EPSG:7791`** (RDN2008 / UTM zone 32N) throughout both pipelines — chosen because
-it is numerically consistent across `.ts`, `3D_SectionsGrid`, `3D_Topo_Intersections*`
-and `Limiti_CartaGeol*`, even though a couple of `.prj` files resolve to `EPSG:6707`
-at only ~70% confidence (same underlying UTM32N projected meters either way).
+All shapefiles and the `.ts` model use the same projected meters (RDN2008 / UTM zone 32N).
+Both pipelines standardize every layer to **`EPSG:6707`** right after loading, via
+`files_utils.standardize_crs` — including layers whose `.prj` originally declared a different
+(but numerically identical) UTM32N authority code, and `3D_Topo_Intersections_Faults*.shp`,
+which carries no recognized authority code at all. No layer is exempt; `EPSG:7791` is not used
+anywhere in the pipeline.
 
 Per the "Linee Guida" PDF (§5, production workflow step 1), the **national GeoIT3D
 submission standard** re-projects models to **`EPSG:6708` (RDN2008 / UTM zone 33N)**.

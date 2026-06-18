@@ -395,6 +395,75 @@ def _normalize_horizon_code(text):
     return s
 
 
+# ---------------------------------------------------------------------------
+# CRS standardization
+# ---------------------------------------------------------------------------
+
+STANDARD_CRS = "EPSG:6707"  # RDN2008 / UTM zone 32N — single CRS baseline for this pipeline
+
+
+def standardize_crs(gdf):
+    """
+    Return `gdf` re-tagged/reprojected to `STANDARD_CRS`.
+
+    All shapefiles in this dataset already share the same RDN2008/UTM-zone-32N projection
+    parameters, even where tagged under a different authority code (verified with `ogr2ogr`:
+    reprojecting between them here changes no coordinate values, only axis-order metadata).
+    Layers with a recognized CRS are reprojected
+    with `to_crs` (a no-op transform in practice); layers with no/unrecognized CRS (e.g.
+    3D_Topo_Intersections_Faults*.shp, which carries an unregistered custom WKT) are re-tagged
+    in place with `set_crs`, since there is nothing valid for `to_crs` to transform from.
+    """
+    if gdf is None or gdf.empty:
+        return gdf
+    if gdf.crs is None:
+        return gdf.set_crs(STANDARD_CRS, allow_override=True)
+    try:
+        return gdf.to_crs(STANDARD_CRS)
+    except Exception:
+        return gdf.set_crs(STANDARD_CRS, allow_override=True)
+
+
+def dissolve_lines_by_key(gdf, key_field, normalize_fn=None):
+    """
+    Group a line GeoDataFrame by `normalize_fn(row[key_field])` and merge each group's
+    geometries into a single continuous line via `linemerge(unary_union(...))`.
+
+    Rows whose normalized key is empty/None are dropped (no entity to dissolve into).
+    Returns `{key: merged_geometry}` — one geometry per geological entity, never a list
+    of per-segment geometries.
+    """
+    from shapely.ops import unary_union, linemerge
+
+    if gdf is None or gdf.empty or key_field not in gdf.columns:
+        return {}
+
+    if normalize_fn is None:
+        normalize_fn = lambda v: str(v).strip().upper()
+
+    groups = {}
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        raw_key = row[key_field]
+        if pd.isna(raw_key) or not str(raw_key).strip():
+            continue
+        key = normalize_fn(raw_key)
+        if not key:
+            continue
+        groups.setdefault(key, []).append(_drop_z(geom))
+
+    merged = {}
+    for key, geoms in groups.items():
+        union = unary_union(geoms)
+        try:
+            merged[key] = linemerge(union)
+        except Exception:
+            merged[key] = union
+    return merged
+
+
 # Reliability weights derived from the 'Affidabili' field of Limiti_CartaGeol, following
 # the evaluation/observation-method quality concept in the ISPRA "Linee Guida" PDF.
 AFFIDABILI_WEIGHTS = {

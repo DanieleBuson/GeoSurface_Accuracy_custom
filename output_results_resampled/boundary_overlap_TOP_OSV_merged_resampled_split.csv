@@ -1,2 +1,2 @@
-surface,topo_length_m,map_length_m,covered_length_m,overlap_pct_topo_in_map,overlap_pct_map_in_topo,mean_distance_m,median_distance_m,p95_distance_m,max_distance_m,buffer_dist_m,n_map_features,n_topo_features
-TOP_OSV_merged_resampled_split,12361.989337955769,7619.679921831284,9023.384555106095,72.99298121380066,97.7714308293112,64.83019134496283,15.368660969512483,429.2443715214284,622.6881609040665,50.0,21,44
+surface,move_length_m,gis_length_m,overlap_pct,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
+TOP_OSV_merged_resampled_split,12361.98933795577,7621.221751932317,72.99383622910297,50.0,44,21
