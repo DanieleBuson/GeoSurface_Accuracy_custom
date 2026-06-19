@@ -1,8 +1,8 @@
-surface,overlap_pct,mean_unit_thickness_m,acceptance_class,n_vertical_checkpoints
-TOP_RTZsup_merged_resampledsplit,78.1,132.3,Accepted,120776
-TOP_ARV_merged_resampled_split,66.3,23.8,Conditionally accepted,79257
-TOP_DPR_merged_resampled_split,29.9,1331.7,Rejected,198301
-TOP_FMZ_merged_resampled_split,50.2,222.6,Conditionally accepted,265842
-TOP_LOP_merged_resampled_split,41.3,43.4,Rejected,286736
-TOP_RTZinf_merged_resampled_split,81.5,153.8,Accepted,169022
-TOP_OSV_merged_resampled_split,73.0,41.9,Accepted,124178
+surface,overlap_pct_mean,mean_unit_thickness_m,acceptance_class,n_vertical_checkpoints
+TOP_ARV_merged_resampledoriginal,81.8,24.8,Accepted,79919
+TOP_DPR_merged_resampledoriginal,65.0,1343.8,Conditionally accepted,199182
+TOP_LOP_merged_resampled_original,68.3,43.6,Conditionally accepted,287197
+TOP_RTZinf_merged_resampled_original,86.1,153.6,Accepted,169257
+TOP_FMZ_merged_resampled_original,73.0,223.2,Accepted,268326
+TOP_RTZsup_merged_resampledoriginal,89.1,136.5,Accepted,120936
+TOP_OSV_merged_resampledoriginal,85.4,39.8,Accepted,124354

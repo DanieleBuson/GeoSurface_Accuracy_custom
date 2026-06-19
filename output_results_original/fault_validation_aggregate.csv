@@ -1,2 +1,2 @@
-n_faults_compared,mean_overlap_pct,buffer_dist_m
-12,81.81297776545568,50.0
+n_faults_compared,mean_fault_overlap_mean,buffer_dist_m
+12,82.32913424205522,50.0

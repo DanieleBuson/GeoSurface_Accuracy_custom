@@ -13,8 +13,9 @@ method. For each surface, it computes:
 - **horizontal confidence** (IDW distance to section/map controls),
 - **vertical confidence** (|ΔZ| against topography-intersection checkpoints),
 - **combined confidence** (horizontal + vertical), and
-- a **boundary-overlap** metric comparing the model's computed outcrop trace against an
-  independently mapped geological contact.
+- a **symmetric (bidirectional) boundary-overlap** metric comparing the model's computed
+  outcrop trace against an independently mapped geological contact, plus an equivalent
+  fault-validation metric.
 
 See **[THEORY.md](./THEORY.md)** for the full method and a description of every output
 file, and **[CONTEXT.md](./CONTEXT.md)** for background on the dataset.
@@ -89,7 +90,9 @@ overwritten).
 
 Each run produces, per surface: `horizontal_confidence_grid_*.csv` (with
 `dist_maps`/`weight_maps` populated), `vertical_confidence_grid_*.csv`,
-`combined_confidence_grid_*.csv`, heatmaps/HTML interactive maps, and (for the 6
-surfaces with a `Base_di` match) `boundary_overlap_<surface>.csv`/`.png`, plus a single
-`boundary_overlap_summary.csv`. **Every file is explained in
-[THEORY.md §9](./THEORY.md#9-output-file-reference).**
+`combined_confidence_grid_*.csv`, heatmaps/HTML interactive maps, and (for surfaces with a
+`Base_di` match) `boundary_overlap_<surface>.csv`/`.png` with symmetric
+`overlap_pct_A_to_B`/`overlap_pct_B_to_A`/`overlap_pct_mean` columns, plus project-level
+`boundary_overlap_summary.csv`, `fault_validation_per_fault.csv`,
+`fault_validation_aggregate.csv`, `acceptance_table.csv`, and `validation_summary.csv`.
+**Every file is explained in [THEORY.md §9](./THEORY.md#9-output-file-reference).**

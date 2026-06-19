@@ -1,13 +1,13 @@
 fault_name,modeled_throw_m,modeled_throw_class,observed_throw_class,tipo_fagli,agreement,n_giaciture_fault_measurements_near
-F6,897.8,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F2,1106.2,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F4,983.5,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F7,845.6,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F8b,825.3,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
-F10,1274.0,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F1,1118.6,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
-F9b,220.0,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
-F9a,197.7,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,2
-F8a,857.6,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
-F5,835.3,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,3
-F3,780.1,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F10_org,1847.7,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F3_org,1510.9,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F6_org,1518.4,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F9a_org,851.0,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
+F2_org,1521.0,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F4_org,1505.5,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F7_org,1517.1,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F8b_org,1512.7,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
+F9b_org,899.3,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,1
+F1_org,1639.9,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,0
+F5_org,1511.5,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,3
+F8a_org,1509.0,120–+ m,significant (>20 m),Faglia con rigetto non trascurabile,consistent,2

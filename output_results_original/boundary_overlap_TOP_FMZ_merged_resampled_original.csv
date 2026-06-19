@@ -1,2 +1,2 @@
-surface,move_length_m,gis_length_m,overlap_pct,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
-TOP_FMZ_merged_resampled_original,26592.034463698008,12837.46456958217,50.1944022734949,50.0,1,28
+surface,move_length_m,gis_length_m,overlap_pct_A_to_B,overlap_pct_B_to_A,overlap_pct_mean,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
+TOP_FMZ_merged_resampled_original,26592.034463698008,12837.46456958217,50.1944022734949,95.8610879892534,73.02774513137416,50.0,1,28

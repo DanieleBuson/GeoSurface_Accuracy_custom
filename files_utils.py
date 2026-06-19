@@ -284,9 +284,11 @@ def read_sections_shapefile(working_dir):
 
 def read_maps_shapefile(working_dir):
     """
-    Read the geological-map contact lineset (e.g. Limiti_CartaGeol*.shp), used as the
-    "maps" (order_p=3) horizontal control tier and as the explicitly-mapped boundary
-    for the boundary-overlap metric.
+    Read the geological-map contact lineset (e.g. Limiti_stratigrafici_carta_geologica_DEF.shp),
+    used as the "maps" (order_p=3) horizontal control tier and as the explicitly-mapped
+    boundary for the boundary-overlap metric. Auto-discovered by filename keyword, not called
+    by either run_accuracy_*.py script in this dataset (they load the shapefile by exact
+    name instead) — kept for compatibility with the upstream tool's auto-discovery workflow.
     """
     try:
         shp_files = [f for f in os.listdir(working_dir) if f.endswith('.shp')]
@@ -375,8 +377,9 @@ def _surface_short_code(surface_name):
 
 def _normalize_map_code(text):
     """
-    Normalize a Limiti_CartaGeol 'Base_di' value (e.g. 'Base RTZ inf', 'BaseLOP') to a
-    short code (e.g. 'RTZINF', 'LOP') comparable with `_surface_short_code`.
+    Normalize a geological-map-contact 'Base_di' value (e.g. 'Base RTZ inf', 'BaseLOP', from
+    Limiti_stratigrafici_carta_geologica_DEF.shp) to a short code (e.g. 'RTZINF', 'LOP')
+    comparable with `_surface_short_code`.
     """
     s = str(text).upper().strip()
     s = re.sub(r'^BASE\s*', '', s)
@@ -464,8 +467,10 @@ def dissolve_lines_by_key(gdf, key_field, normalize_fn=None):
     return merged
 
 
-# Reliability weights derived from the 'Affidabili' field of Limiti_CartaGeol, following
-# the evaluation/observation-method quality concept in the ISPRA "Linee Guida" PDF.
+# Reliability weights derived from the 'Affidabili' field of the geological-map-contact
+# lineset (Limiti_stratigrafici_carta_geologica_DEF.shp in this dataset — the sole source of
+# cartographic reliability), following the evaluation/observation-method quality concept in
+# the ISPRA "Linee Guida" PDF.
 AFFIDABILI_WEIGHTS = {
     'osservato': 1.0,
     'dedotto': 0.75,
@@ -492,9 +497,14 @@ def compute_reliability_weights(values):
 
 def select_map_lines_for_surface(maps_gdf, surface_name):
     """
-    Return the non-tectonic Limiti_CartaGeol features whose 'Base_di' matches this
-    surface's short code (`_surface_short_code`) — i.e. the geological boundary
-    explicitly mapped from GIS for this surface.
+    Return the non-tectonic geological-map-contact features (e.g. from
+    Limiti_stratigrafici_carta_geologica_DEF.shp) whose 'Base_di' matches this surface's
+    short code (`_surface_short_code`) — i.e. the geological boundary explicitly mapped from
+    GIS for this surface.
+
+    This is the plain (non-stratigraphic-translation) selector; the active pipeline uses
+    `custom_validation.select_map_lines_strat` instead, which additionally applies the
+    Base_di -> underlying-surface STRAT_MAP translation. Kept for compatibility / direct use.
     """
     if maps_gdf is None or maps_gdf.empty:
         return maps_gdf
@@ -1831,15 +1841,25 @@ def _line_parts_xy(geom):
 def generate_boundary_overlap_outputs(topo_shp, maps_shp, surface_name, output_dir,
                                       buffer_dist=50.0, xlim=None, ylim=None):
     """
+    DEPRECATED / unused legacy reference: this is the original one-directional
+    (non-dissolved, non-symmetric) implementation vendored verbatim from the upstream
+    BaterHub/GeoSurface_Accuracy tool. Neither run_accuracy_original.py nor
+    run_accuracy_resampled.py call this function — the active pipeline uses
+    `custom_validation.generate_enhanced_boundary_overlap` instead, which dissolves all
+    segments per surface and computes a symmetric (bidirectional) overlap_pct_A_to_B /
+    overlap_pct_B_to_A / overlap_pct_mean. Kept only for reference to the upstream tool's
+    original method; do not wire this into the dataset's pipeline.
+
     Compare the model-interpolated topo-horizon intersection trace (3D_Topo_Intersections,
     matched via 'Horizon' -> `select_topo_lines_for_surface`) against the explicitly-mapped
-    geological boundary (Limiti_CartaGeol non-tectonic contacts, matched via 'Base_di' ->
+    geological boundary (non-tectonic stratigraphic contacts, matched via 'Base_di' ->
     `select_map_lines_for_surface`) for this surface.
 
     Buffers the mapped boundary by `buffer_dist` meters and computes the % of the
     topo-intersection line length that falls inside that buffer (buffer-based % length
-    overlap). Writes `boundary_overlap_<surface_name>.csv`/`.png` to `output_dir`.
-    Returns a dict of metrics, or None if either input is missing/empty for this surface.
+    overlap, one-directional only). Writes `boundary_overlap_<surface_name>.csv`/`.png` to
+    `output_dir`. Returns a dict of metrics, or None if either input is missing/empty for
+    this surface.
     """
     from shapely.ops import unary_union
 
@@ -1898,7 +1918,7 @@ def generate_boundary_overlap_outputs(topo_shp, maps_shp, surface_name, output_d
         for i, geom in enumerate(map_geoms):
             for x, y in _line_parts_xy(geom):
                 ax.plot(x, y, color='darkorange', linewidth=2,
-                        label='Mapped boundary (GIS, Limiti_CartaGeol)' if i == 0 else None)
+                        label='Mapped boundary (GIS)' if i == 0 else None)
         for i, geom in enumerate(topo_geoms):
             for x, y in _line_parts_xy(geom):
                 ax.plot(x, y, color='steelblue', linewidth=2,

@@ -1,0 +1,2 @@
+surface,move_length_m,gis_length_m,overlap_pct_A_to_B,overlap_pct_B_to_A,overlap_pct_mean,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
+TOP_RTZinf_merged_resampled_original,16811.78723940219,14087.522783711855,81.53743948169357,90.69311313796592,86.11527630982974,50.0,18,53

@@ -1,18 +1,24 @@
 """
 GeoSurface_Accuracy - custom dataset, RESAMPLED inputs.
 
-Uses densified (0.1 m step) topo-intersection and geological-map shapefiles,
-plus the sub-TOPO-only split/ horizon and fault surfaces.
+Uses the SAME full original horizon/fault surfaces as run_accuracy_original.py
+(original/GOCAD_ASCII_All.ts + original/GOCAD_ASCII_Faults.ts) — confidence-map processing
+must always run on complete original horizons, never on split/segmented/partial surfaces.
+The only thing "resampled" means here is that the topo-intersection checkpoint shapefiles
+are the densified (0.1 m step) variants, used for vertical checkpoints and boundary/fault
+overlap geometry.
 
 Key changes vs the original pipeline:
-  - .ts source: split/GOCAD_ASCII_All.ts (horizons + faults, below TOPO only)
+  - .ts source: identical to run_accuracy_original.py (original/GOCAD_ASCII_All.ts +
+    original/GOCAD_ASCII_Faults.ts) — only the topo-intersection/fault shapefiles differ
   - Stratigraphic contact matching: STRAT_MAP translation (Base_X → correct surface)
-  - Boundary overlap: single dissolved MOVE line vs single dissolved GIS line, overlap_pct only
+  - Boundary overlap: single dissolved MOVE line vs single dissolved GIS line, symmetric
+    (overlap_pct_A_to_B / overlap_pct_B_to_A / overlap_pct_mean)
   - Fault throw impact layer per horizon (IDW proxy)
   - Fault trace validation: dissolved MOVE faults vs dissolved GIS faults (Faglie_carta_geologica_DEF,
-    grouped by Nome_fagli), overlap_pct only
+    grouped by Nome_fagli), symmetric (fault_overlap_A_to_B / fault_overlap_B_to_A / fault_overlap_mean)
   - Fault throw qualitative comparison (model vs Faglie/Giaciture)
-  - Per-surface acceptance classification (driven by overlap_pct only)
+  - Per-surface acceptance classification (driven by overlap_pct_mean only)
 
 CRS baseline: EPSG:6707 (RDN2008/UTM32N) for every layer in this pipeline. Some shapefiles
 were previously tagged with a different (but numerically identical) UTM32N authority code;
@@ -51,8 +57,8 @@ from custom_validation import (
 WORKING_DIR = "working_files_folder"
 OUTPUT_DIR = "output_results_resampled"
 
-# Horizons + faults in one file (all below TOPO); fault surfaces have no "TOP_" prefix
-TS_FILE = os.path.join("split", "GOCAD_ASCII_All.ts")
+TS_HORIZONS_FILE = os.path.join("original", "GOCAD_ASCII_All.ts")
+TS_FAULTS_FILE = os.path.join("original", "GOCAD_ASCII_Faults.ts")
 
 SECTIONS_FILE = "3D_SectionsGrid.shp"
 MAPS_FILE = "Limiti_stratigrafici_carta_geologica_DEF.shp"  # sole GIS source for stratigraphic contacts
@@ -76,44 +82,25 @@ def main():
         print(f"The folder {WORKING_DIR} does not exist.")
         return None
 
-    # --- Load surfaces: horizons (TOP_*) and faults (F*) ---
-    ts_path = os.path.join(WORKING_DIR, TS_FILE)
-    surfaces_data = read_gocad_ts_multi(ts_path, read_thickness=True)
+    # --- Load horizon surfaces (full original horizons; never split/segmented/partial) ---
+    ts_horiz_path = os.path.join(WORKING_DIR, TS_HORIZONS_FILE)
+    surfaces_data = read_gocad_ts_multi(ts_horiz_path, read_thickness=True)
     if not surfaces_data:
-        print("No surfaces found in the .ts file.")
+        print("No surfaces found in the horizons .ts file.")
         return None
 
-    # TOP_OSV is absent from GOCAD_ASCII_All.ts; load it from its individual file
-    osv_path = os.path.join(WORKING_DIR, "split", "GOCAD_ASCII_TOP_OSV.ts")
-    if os.path.exists(osv_path):
-        osv_data = read_gocad_ts_multi(osv_path, read_thickness=True)
-        surfaces_data.update(osv_data)
-
-    # Supplement thickness for surfaces stored as VRTX (no property columns) in All.ts.
-    # TOP_DPR is the only affected surface; load from its individual split/ file.
-    split_dir = os.path.join(WORKING_DIR, "split")
-    for sname_key, sdata in list(surfaces_data.items()):
-        if not sname_key.upper().startswith('TOP_'):
-            continue
-        t = sdata.get('thickness')
-        has_thickness = t is not None and len(t) > 0 and not np.all(np.isnan(t))
-        if has_thickness:
-            continue
-        # Find matching individual .ts file in split/
-        candidates = [f for f in os.listdir(split_dir)
-                      if f.startswith('GOCAD_ASCII_TOP_') and f.endswith('.ts')
-                      and f not in ('GOCAD_ASCII_All.ts',)]
-        for cand in candidates:
-            ind_data = read_gocad_ts_multi(os.path.join(split_dir, cand), read_thickness=True)
-            match = next((v for k, v in ind_data.items()
-                          if k.upper().replace('_', '') == sname_key.upper().replace('_', '')), None)
-            if match is not None and match.get('thickness') is not None:
-                surfaces_data[sname_key]['thickness'] = match['thickness']
-                print(f"  Supplemented thickness for {sname_key} from {cand}")
-                break
-
+    # original/GOCAD_ASCII_All.ts may contain both horizons and faults; separate by prefix
     horizon_surfaces = {k: v for k, v in surfaces_data.items() if k.upper().startswith('TOP_')}
-    fault_surfaces = {k: v for k, v in surfaces_data.items() if not k.upper().startswith('TOP_')}
+    fault_surfaces_from_all = {k: v for k, v in surfaces_data.items() if not k.upper().startswith('TOP_')}
+
+    # Load dedicated faults file if faults not already in the All.ts
+    ts_faults_path = os.path.join(WORKING_DIR, TS_FAULTS_FILE)
+    if os.path.exists(ts_faults_path):
+        faults_data = read_gocad_ts_multi(ts_faults_path)
+        fault_surfaces = {**fault_surfaces_from_all, **faults_data}
+    else:
+        fault_surfaces = fault_surfaces_from_all
+
     print(f"Horizon surfaces ({len(horizon_surfaces)}): {list(horizon_surfaces.keys())}")
     print(f"Fault surfaces  ({len(fault_surfaces)}): {list(fault_surfaces.keys())}")
 
@@ -198,7 +185,7 @@ def main():
                 crs_proj=CRS_MODEL, alpha=0.5, mode="min"
             )
 
-        # Enhanced boundary overlap (corrected stratigraphic matching + bidirectional + distance stats)
+        # Enhanced boundary overlap (corrected stratigraphic matching, bidirectional A<->B)
         overlap_result = None
         try:
             overlap_result = generate_enhanced_boundary_overlap(
@@ -206,7 +193,9 @@ def main():
                 buffer_dist=BUFFER_DIST_M, xlim=global_xlim, ylim=global_ylim,
             )
             if overlap_result:
-                print(f"  Boundary overlap_pct: {overlap_result['overlap_pct']:.1f}%")
+                print(f"  Boundary overlap: A->B={overlap_result['overlap_pct_A_to_B']:.1f}% "
+                      f"B->A={overlap_result['overlap_pct_B_to_A']:.1f}% "
+                      f"mean={overlap_result['overlap_pct_mean']:.1f}%")
                 enhanced_overlap_results.append(overlap_result)
         except Exception as e:
             print(f"  Error in enhanced boundary overlap: {e}")

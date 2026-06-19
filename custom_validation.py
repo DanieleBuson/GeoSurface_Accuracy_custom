@@ -3,12 +3,15 @@ custom_validation.py — extended geological validation for the Trentino 7-surfa
 
 New functions called by both run_accuracy_original.py and run_accuracy_resampled.py:
   - select_map_lines_strat       : corrected stratigraphic contact matching
-  - generate_enhanced_boundary_overlap : single-geometry MOVE vs GIS overlap_pct
+  - generate_enhanced_boundary_overlap : dissolved MOVE vs GIS, symmetric overlap
+                                          (overlap_pct_A_to_B / _B_to_A / _mean)
   - compute_fault_throw_per_horizon    : IDW fault-throw-impact layer per horizon
-  - generate_fault_validation_outputs  : dissolved MOVE faults vs dissolved GIS faults
+  - generate_fault_validation_outputs  : dissolved MOVE faults vs dissolved GIS faults,
+                                          symmetric overlap (fault_overlap_A_to_B / _B_to_A / _mean)
   - generate_fault_throw_comparison    : qualitative modeled vs observed throw table
   - compute_unit_thickness_at_grid     : interpolate PVRTX Thickness onto eval grid
-  - compute_acceptance_class           : single-surface acceptance classification
+  - compute_acceptance_class           : single-surface acceptance classification (keyed on
+                                          overlap_pct_mean)
   - generate_acceptance_table          : aggregate table + model-level summary
 
 CRS baseline: EPSG:6707 (RDN2008/UTM32N) for every layer used by this module — callers
@@ -95,8 +98,9 @@ def _fault_sort_key(fault_id):
 
 def select_map_lines_strat(maps_gdf, surface_name, strat_map=None):
     """
-    Return non-tectonic Limiti_CartaGeol features whose 'Base_di' corresponds to the
-    UNDERLYING surface `surface_name` according to the stratigraphic translation table.
+    Return non-tectonic Limiti_stratigrafici_carta_geologica_DEF features whose 'Base_di'
+    corresponds to the UNDERLYING surface `surface_name` according to the stratigraphic
+    translation table.
 
     In the geological map, a contact is labelled as "Base of the OVERLYING unit",
     while the GOCAD model stores it as "Top of the UNDERLYING unit".  STRAT_MAP
@@ -140,13 +144,20 @@ def select_map_lines_strat(maps_gdf, surface_name, strat_map=None):
 def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface_name,
                                        output_dir, buffer_dist=50.0, xlim=None, ylim=None):
     """
-    Single-geometry boundary-overlap metric: dissolves every MOVE topo-intersection segment
-    for this formation into one continuous line, and every GIS stratigraphic-contact segment
-    (already formation-filtered by `select_map_lines_strat`) into one continuous line, then
-    computes a single one-directional overlap ratio:
+    Symmetric (bidirectional) boundary-overlap metric: dissolves every MOVE topo-intersection
+    segment for this formation into one continuous line A (via dissolve + line-merge), and
+    every GIS stratigraphic-contact segment (already formation-filtered by
+    `select_map_lines_strat`) into one continuous line B, then computes overlap in both
+    directions:
 
-        overlap_pct = 100 * length(intersection(gis_line.buffer(buffer_dist), move_line))
-                          / length(move_line)
+        overlap_pct_A_to_B = 100 * length(intersection(A, B.buffer(buffer_dist))) / length(A)
+        overlap_pct_B_to_A = 100 * length(intersection(B, A.buffer(buffer_dist))) / length(B)
+        overlap_pct_mean   = (overlap_pct_A_to_B + overlap_pct_B_to_A) / 2
+
+    A = MOVE-interpolated topo-intersection line (3D_Topo_Intersections); B = GIS-mapped
+    stratigraphic contact (Limiti_stratigrafici_carta_geologica_DEF). `overlap_pct_mean` is
+    the official comparison value — it is symmetric, so it is not skewed by one line being
+    much longer/shorter or more finely segmented than the other.
 
     Inputs:
       topo_shp              : full 3D_Topo_Intersections GeoDataFrame (all surfaces)
@@ -175,16 +186,24 @@ def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface
     gis_line = linemerge(unary_union(map_geoms))
 
     gis_buffer = gis_line.buffer(buffer_dist)
+    move_buffer = move_line.buffer(buffer_dist)
     move_length = move_line.length
     gis_length = gis_line.length
-    covered_length = move_line.intersection(gis_buffer).length
-    overlap_pct = 100.0 * covered_length / move_length if move_length > 0 else np.nan
+
+    overlap_pct_A_to_B = (100.0 * move_line.intersection(gis_buffer).length / move_length
+                          if move_length > 0 else np.nan)
+    overlap_pct_B_to_A = (100.0 * gis_line.intersection(move_buffer).length / gis_length
+                          if gis_length > 0 else np.nan)
+    overlap_pct_mean = (overlap_pct_A_to_B + overlap_pct_B_to_A) / 2 \
+        if not (np.isnan(overlap_pct_A_to_B) or np.isnan(overlap_pct_B_to_A)) else np.nan
 
     result = {
         'surface': surface_name,
         'move_length_m': move_length,
         'gis_length_m': gis_length,
-        'overlap_pct': overlap_pct,
+        'overlap_pct_A_to_B': overlap_pct_A_to_B,
+        'overlap_pct_B_to_A': overlap_pct_B_to_A,
+        'overlap_pct_mean': overlap_pct_mean,
         'buffer_dist_m': buffer_dist,
         'n_move_segments_merged': len(topo_geoms),
         'n_gis_segments_merged': len(map_geoms),
@@ -196,10 +215,19 @@ def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface
     # Plot
     try:
         fig, ax = plt.subplots(figsize=(10, 8))
-        buffer_polys = [gis_buffer] if gis_buffer.geom_type == 'Polygon' else list(gis_buffer.geoms)
-        for poly in buffer_polys:
+        gis_buffer_polys = [gis_buffer] if gis_buffer.geom_type == 'Polygon' else list(gis_buffer.geoms)
+        for poly in gis_buffer_polys:
             bx, by = poly.exterior.xy
-            ax.fill(bx, by, color='orange', alpha=0.15)
+            ax.fill(bx, by, color='orange', alpha=0.15,
+                    label=f'GIS buffer ({buffer_dist:.0f} m)' if poly is gis_buffer_polys[0] else None)
+            for interior in poly.interiors:
+                ix, iy = interior.xy
+                ax.fill(ix, iy, color='white', alpha=1.0)
+        move_buffer_polys = [move_buffer] if move_buffer.geom_type == 'Polygon' else list(move_buffer.geoms)
+        for poly in move_buffer_polys:
+            bx, by = poly.exterior.xy
+            ax.fill(bx, by, color='steelblue', alpha=0.10,
+                    label=f'MOVE buffer ({buffer_dist:.0f} m)' if poly is move_buffer_polys[0] else None)
             for interior in poly.interiors:
                 ix, iy = interior.xy
                 ax.fill(ix, iy, color='white', alpha=1.0)
@@ -209,8 +237,9 @@ def generate_enhanced_boundary_overlap(topo_shp, maps_lines_prefiltered, surface
         for i, (x, y) in enumerate(_line_parts_xy(move_line)):
             ax.plot(x, y, color='steelblue', linewidth=2,
                     label='MOVE interpolated' if i == 0 else None)
-        ax.set_title(f'Boundary overlap — {surface_name}: {overlap_pct:.1f}%'
-                     f' (buffer {buffer_dist:.0f} m)')
+        ax.set_title(f'Boundary overlap — {surface_name}: mean={overlap_pct_mean:.1f}%'
+                     f' (A→B={overlap_pct_A_to_B:.1f}%, B→A={overlap_pct_B_to_A:.1f}%,'
+                     f' buffer {buffer_dist:.0f} m)')
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
         ax.legend(fontsize=9)
@@ -402,8 +431,15 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
     MOVE's 'F8a' and GIS's '8a' resolve to the same key. Faults present in only one source are
     skipped (never guessed) and logged. Both inputs must already be in EPSG:6707.
 
-    overlap_pct = 100 * length(intersection(gis_fault.buffer(buffer_dist), move_fault))
-                      / length(move_fault)
+    Symmetric (bidirectional) overlap, identical methodology to the horizon boundary-overlap
+    metric (`generate_enhanced_boundary_overlap`) and the same 50 m buffer:
+
+        fault_overlap_A_to_B = 100 * length(intersection(move_fault, gis_fault.buffer(d))) / length(move_fault)
+        fault_overlap_B_to_A = 100 * length(intersection(gis_fault, move_fault.buffer(d))) / length(gis_fault)
+        fault_overlap_mean   = (fault_overlap_A_to_B + fault_overlap_B_to_A) / 2
+
+    `fault_overlap_mean` is the main validation parameter. No P95 or distance-based metric is
+    used anywhere in this function.
 
     Writes:
       fault_validation_aggregate.csv  — single-row model-level summary
@@ -444,13 +480,20 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
         move_geom = move_faults[fid]
         gis_geom = gis_faults[fid]
         gis_buf = gis_geom.buffer(buffer_dist)
-        covered = move_geom.intersection(gis_buf).length
-        overlap_pct = 100 * covered / move_geom.length if move_geom.length > 0 else np.nan
+        move_buf = move_geom.buffer(buffer_dist)
+        fault_overlap_A_to_B = (100 * move_geom.intersection(gis_buf).length / move_geom.length
+                                if move_geom.length > 0 else np.nan)
+        fault_overlap_B_to_A = (100 * gis_geom.intersection(move_buf).length / gis_geom.length
+                                if gis_geom.length > 0 else np.nan)
+        fault_overlap_mean = (fault_overlap_A_to_B + fault_overlap_B_to_A) / 2 \
+            if not (np.isnan(fault_overlap_A_to_B) or np.isnan(fault_overlap_B_to_A)) else np.nan
         per_fault_rows.append({
             'fault_id': f'Faglia {fid}',
             'move_length_m': move_geom.length,
             'gis_length_m': gis_geom.length,
-            'overlap_pct': overlap_pct,
+            'fault_overlap_A_to_B': fault_overlap_A_to_B,
+            'fault_overlap_B_to_A': fault_overlap_B_to_A,
+            'fault_overlap_mean': fault_overlap_mean,
         })
 
     per_fault_df = pd.DataFrame(per_fault_rows)
@@ -460,7 +503,7 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
 
     agg_summary = pd.DataFrame([{
         'n_faults_compared': len(common_ids),
-        'mean_overlap_pct': per_fault_df['overlap_pct'].mean(),
+        'mean_fault_overlap_mean': per_fault_df['fault_overlap_mean'].mean(),
         'buffer_dist_m': buffer_dist,
     }])
     agg_path = os.path.join(output_dir, 'fault_validation_aggregate.csv')
@@ -629,22 +672,23 @@ def compute_unit_thickness_at_grid(horizon_vertices, thickness_arr, grid_points)
 # 7. Acceptance classification
 # ---------------------------------------------------------------------------
 
-def compute_acceptance_class(overlap_pct):
+def compute_acceptance_class(overlap_pct_mean):
     """
-    Classify a single surface's validation result from `overlap_pct` alone (the only
-    surviving boundary-overlap metric).
+    Classify a single surface's validation result from `overlap_pct_mean` alone — the
+    symmetric, bidirectional boundary-overlap metric is the only surviving comparison value
+    (no P95 or one-directional overlap_pct anywhere in this pipeline).
 
     Classification rules:
-      Accepted              : overlap_pct >= 70
-      Conditionally accepted: overlap_pct >= 50
-      Rejected               : overlap_pct < 50
-      No data                : overlap_pct is NaN
+      Accepted              : overlap_pct_mean >= 70
+      Conditionally accepted: overlap_pct_mean >= 50
+      Rejected               : overlap_pct_mean < 50
+      No data                : overlap_pct_mean is NaN
     """
-    if overlap_pct is None or np.isnan(overlap_pct):
+    if overlap_pct_mean is None or np.isnan(overlap_pct_mean):
         return 'No data'
-    if overlap_pct >= 70:
+    if overlap_pct_mean >= 70:
         return 'Accepted'
-    if overlap_pct >= 50:
+    if overlap_pct_mean >= 50:
         return 'Conditionally accepted'
     return 'Rejected'
 
@@ -675,14 +719,14 @@ def generate_acceptance_table(per_surface_results, output_dir):
         thick = res.get('thickness_at_grid')
         vert = res.get('vert_outputs') or {}
 
-        overlap_pct = ovlp.get('overlap_pct', np.nan)
+        overlap_pct_mean = ovlp.get('overlap_pct_mean', np.nan)
         mean_thickness = float(np.nanmean(thick)) if thick is not None and len(thick) > 0 else np.nan
 
-        cls = compute_acceptance_class(overlap_pct)
+        cls = compute_acceptance_class(overlap_pct_mean)
 
         rows.append({
             'surface': sname,
-            'overlap_pct': round(overlap_pct, 1) if not np.isnan(overlap_pct) else np.nan,
+            'overlap_pct_mean': round(overlap_pct_mean, 1) if not np.isnan(overlap_pct_mean) else np.nan,
             'mean_unit_thickness_m': round(mean_thickness, 1) if not np.isnan(mean_thickness) else np.nan,
             'acceptance_class': cls,
             'n_vertical_checkpoints': vert.get('samples', 0),
@@ -696,7 +740,7 @@ def generate_acceptance_table(per_surface_results, output_dir):
     # Global summary
     n_total = len(df)
     counts = df['acceptance_class'].value_counts().to_dict()
-    valid_overlaps = df['overlap_pct'].dropna()
+    valid_overlaps = df['overlap_pct_mean'].dropna()
     summary = {
         'n_surfaces': n_total,
         'n_accepted': counts.get('Accepted', 0),

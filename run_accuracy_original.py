@@ -6,14 +6,16 @@ separate original fault surfaces (original/GOCAD_ASCII_Faults.ts), and the
 non-resampled topo-intersection and geological-map shapefiles.
 
 Key changes vs the previous version:
-  - .ts source: original/GOCAD_ASCII_All.ts (horizons) + original/GOCAD_ASCII_Faults.ts
+  - .ts source: original/GOCAD_ASCII_All.ts (horizons) + original/GOCAD_ASCII_Faults.ts —
+    full original horizons only, never split/segmented/partial surfaces
   - Stratigraphic contact matching: STRAT_MAP translation (Base_X → correct surface)
-  - Boundary overlap: single dissolved MOVE line vs single dissolved GIS line, overlap_pct only
+  - Boundary overlap: single dissolved MOVE line vs single dissolved GIS line, symmetric
+    (overlap_pct_A_to_B / overlap_pct_B_to_A / overlap_pct_mean)
   - Fault throw impact layer per horizon (IDW proxy from fault surface Z-difference)
   - Fault trace validation: dissolved MOVE faults vs dissolved GIS faults (Faglie_carta_geologica_DEF,
-    grouped by Nome_fagli), overlap_pct only
+    grouped by Nome_fagli), symmetric (fault_overlap_A_to_B / fault_overlap_B_to_A / fault_overlap_mean)
   - Fault throw qualitative comparison (model vs Faglie/Giaciture)
-  - Per-surface acceptance classification (driven by overlap_pct only)
+  - Per-surface acceptance classification (driven by overlap_pct_mean only)
     (Thickness property may be absent in original .ts files; handled gracefully)
 
 CRS baseline: EPSG:6707 (RDN2008/UTM32N) for every layer in this pipeline. Some shapefiles
@@ -187,7 +189,9 @@ def main():
                 buffer_dist=BUFFER_DIST_M, xlim=global_xlim, ylim=global_ylim,
             )
             if overlap_result:
-                print(f"  Boundary overlap_pct: {overlap_result['overlap_pct']:.1f}%")
+                print(f"  Boundary overlap: A->B={overlap_result['overlap_pct_A_to_B']:.1f}% "
+                      f"B->A={overlap_result['overlap_pct_B_to_A']:.1f}% "
+                      f"mean={overlap_result['overlap_pct_mean']:.1f}%")
                 enhanced_overlap_results.append(overlap_result)
         except Exception as e:
             print(f"  Error in enhanced boundary overlap: {e}")
