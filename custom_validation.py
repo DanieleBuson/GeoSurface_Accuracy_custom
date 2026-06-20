@@ -84,6 +84,20 @@ def _normalize_fault_id(text):
     return s
 
 
+# MOVE's 3D_Topo_Intersections_Faults 'Name' (and the underlying GOCAD_ASCII_Faults.ts surface
+# names F4_org/F6_org) mislabels these two fault traces relative to the trusted GIS Nome_fagli
+# naming: the surface MOVE calls 'F4' is geologically fault 6, and the surface MOVE calls 'F6'
+# is geologically fault 4 (confirmed by comparing dissolved geometry centroids/bounds — MOVE's
+# 'F4' trace spatially coincides with GIS Nome_fagli='6', and MOVE's 'F6' with GIS Nome_fagli='4').
+MOVE_FAULT_ID_CORRECTIONS = {'4': '6', '6': '4'}
+
+
+def _normalize_move_fault_id(text):
+    """Like `_normalize_fault_id`, with the known MOVE F4/F6 mislabeling corrected."""
+    key = _normalize_fault_id(text)
+    return MOVE_FAULT_ID_CORRECTIONS.get(key, key)
+
+
 def _fault_sort_key(fault_id):
     """Natural sort key for fault ids like '1', '8A', '9B', '10' -> numeric-then-letter order."""
     m = re.match(r'^(\d+)([A-Z]*)$', fault_id)
@@ -457,7 +471,7 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
         return None
 
     gis_faults = dissolve_lines_by_key(faglie_gdf, 'Nome_fagli', normalize_fn=_normalize_fault_id)
-    move_faults = dissolve_lines_by_key(topo_faults_shp, 'Name', normalize_fn=_normalize_fault_id)
+    move_faults = dissolve_lines_by_key(topo_faults_shp, 'Name', normalize_fn=_normalize_move_fault_id)
 
     if not gis_faults or not move_faults:
         print("  Fault validation skipped: dissolve produced no fault geometries.")
