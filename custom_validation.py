@@ -511,6 +511,8 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
     print(f"  Wrote {agg_path}")
 
     # --- Map plot: one color per fault id, GIS solid / MOVE dashed, one legend entry per fault ---
+    rows_by_fid = {row['fault_id']: row for row in per_fault_rows}
+    mean_fault_overlap_mean = agg_summary['mean_fault_overlap_mean'].iloc[0]
     map_png = os.path.join(output_dir, 'fault_validation_map.png')
     try:
         fig, ax = plt.subplots(figsize=(12, 10))
@@ -520,12 +522,16 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
             colors = cm.get_cmap('tab20', max(len(common_ids), 1))
         for i, fid in enumerate(common_ids):
             color = colors(i)
+            row = rows_by_fid[f'Faglia {fid}']
+            label = (f"Faglia {fid}: mean={row['fault_overlap_mean']:.1f}%"
+                     f" (A→B={row['fault_overlap_A_to_B']:.1f}%, B→A={row['fault_overlap_B_to_A']:.1f}%)")
             for j, (x, y) in enumerate(_line_parts_xy(gis_faults[fid])):
                 ax.plot(x, y, color=color, linewidth=2.0, linestyle='-',
-                        label=f'Faglia {fid}' if j == 0 else None)
+                        label=label if j == 0 else None)
             for x, y in _line_parts_xy(move_faults[fid]):
                 ax.plot(x, y, color=color, linewidth=2.0, linestyle='--')
-        ax.set_title('Fault validation — GIS mapped (solid) vs MOVE interpolated (dashed)')
+        ax.set_title('Fault validation — GIS mapped (solid) vs MOVE interpolated (dashed):'
+                     f' mean={mean_fault_overlap_mean:.1f}% (buffer {buffer_dist:.0f} m)')
         ax.set_xlabel('X (m)')
         ax.set_ylabel('Y (m)')
         ax.legend(fontsize=7, ncol=2)

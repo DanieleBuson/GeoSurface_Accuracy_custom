@@ -278,9 +278,13 @@ def main():
     # --- Fault validation ---
     print("\n--- Fault validation ---")
     try:
-        generate_fault_validation_outputs(
+        fault_val_result = generate_fault_validation_outputs(
             faults_topo, faglie_gdf, OUTPUT_DIR, buffer_dist=BUFFER_DIST_M
         )
+        if fault_val_result:
+            agg = fault_val_result['aggregate'].iloc[0]
+            print(f"  Fault overlap: mean={agg['mean_fault_overlap_mean']:.1f}% "
+                  f"over {int(agg['n_faults_compared'])} faults (buffer {agg['buffer_dist_m']:.0f} m)")
     except Exception as e:
         print(f"Error in fault validation: {e}")
         import traceback; traceback.print_exc()
