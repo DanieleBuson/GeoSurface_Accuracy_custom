@@ -1843,8 +1843,8 @@ def generate_boundary_overlap_outputs(topo_shp, maps_shp, surface_name, output_d
     """
     DEPRECATED / unused legacy reference: this is the original one-directional
     (non-dissolved, non-symmetric) implementation vendored verbatim from the upstream
-    BaterHub/GeoSurface_Accuracy tool. Neither run_accuracy_original.py nor
-    run_accuracy_resampled.py call this function — the active pipeline uses
+    BaterHub/GeoSurface_Accuracy tool. run_accuracy_original.py does not call this
+    function — the active pipeline uses
     `custom_validation.generate_enhanced_boundary_overlap` instead, which dissolves all
     segments per surface and computes a symmetric (bidirectional) overlap_pct_A_to_B /
     overlap_pct_B_to_A / overlap_pct_mean. Kept only for reference to the upstream tool's

@@ -1,7 +1,7 @@
 """
 custom_validation.py — extended geological validation for the Trentino 7-surface model.
 
-New functions called by both run_accuracy_original.py and run_accuracy_resampled.py:
+New functions called by run_accuracy_original.py:
   - select_map_lines_strat       : corrected stratigraphic contact matching
   - generate_enhanced_boundary_overlap : dissolved MOVE vs GIS, symmetric overlap
                                           (overlap_pct_A_to_B / _B_to_A / _mean)
