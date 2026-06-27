@@ -70,7 +70,7 @@ CRS_MODEL = "EPSG:6707"   # RDN2008/UTM32N — single CRS baseline for the whole
 GRID_SPACING = 200.0
 LINE_STEP = 200.0
 MAPS_STEP = 100.0
-BUFFER_DIST_M = 50.0
+BUFFER_DIST_M = 20.0
 
 
 def main():
