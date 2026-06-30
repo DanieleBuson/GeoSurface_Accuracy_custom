@@ -14,7 +14,6 @@ Key changes vs the previous version:
   - Fault throw impact layer per horizon (IDW proxy from fault surface Z-difference)
   - Fault trace validation: dissolved MOVE faults vs dissolved GIS faults (Faglie_carta_geologica_DEF,
     grouped by Nome_fagli), symmetric (fault_overlap_A_to_B / fault_overlap_B_to_A / fault_overlap_mean)
-  - Fault throw qualitative comparison (model vs Faglie/Giaciture)
   - Per-surface acceptance classification (driven by overlap_pct_mean only)
     (Thickness property may be absent in original .ts files; handled gracefully)
 
@@ -37,6 +36,7 @@ from custom_utils import (
     generate_combined_confidence,
     visualize_data,
     standardize_crs,
+    clean_formation_name,
 )
 from custom_validation import (
     STRAT_MAP,
@@ -44,7 +44,6 @@ from custom_validation import (
     generate_enhanced_boundary_overlap,
     compute_fault_throw_per_horizon,
     generate_fault_validation_outputs,
-    generate_fault_throw_comparison,
     compute_unit_thickness_at_grid,
     generate_acceptance_table,
 )
@@ -63,7 +62,6 @@ MAPS_FILE = "Limiti_stratigrafici_carta_geologica_DEF.shp"  # sole GIS source fo
 TOPO_FILE = "3D_Topo_Intersections.shp"          # horizon topo-intersections
 FAULTS_TOPO_FILE = "3D_Topo_Intersections_Faults.shp"
 FAGLIE_FILE = "Faglie_carta_geologica_DEF.shp"   # sole GIS source for faults
-GIACITURE_FILE = "Giaciture_FB.shp"
 
 CRS_MODEL = "EPSG:6707"   # RDN2008/UTM32N — single CRS baseline for the whole pipeline
 
@@ -109,11 +107,10 @@ def main():
 
     faults_topo = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, FAULTS_TOPO_FILE)))
     faglie_gdf = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, FAGLIE_FILE)))
-    giaciture_gdf = standardize_crs(gpd.read_file(os.path.join(WORKING_DIR, GIACITURE_FILE)))
 
     print(f"Sections: {len(sections_all)}, Maps: {len(maps_all)}, "
           f"Topo: {len(topo_all)}, FaultTopo: {len(faults_topo)}, "
-          f"Faglie: {len(faglie_gdf)}, Giaciture: {len(giaciture_gdf)}")
+          f"Faglie: {len(faglie_gdf)}")
 
     # --- Global extents ---
     all_vert_list = [v for v in horizon_surfaces.values()
@@ -132,14 +129,18 @@ def main():
 
     global_xlim = (global_xmin, global_xmax)
     global_ylim = (global_ymin, global_ymax)
-    study_bbox = (global_xmin, global_ymin, global_xmax, global_ymax)
 
     # --- Per-horizon loop ---
     results = {}
     all_vertices = []
     enhanced_overlap_results = []
 
-    for sname, data in horizon_surfaces.items():
+    for raw_sname, data in horizon_surfaces.items():
+        # Output filenames use a cleaned formation name (modeling-software processing
+        # tags like merged/resampled/split stripped) plus a single "_original" suffix
+        # marking this as the complete, non-split surface this pipeline always uses.
+        formation_name = clean_formation_name(raw_sname)
+        sname = f"{formation_name}_original"
         print(f"\n--- Surface: {sname} ---")
         vertices = data.get('vertices')
         triangles = data.get('triangles')
@@ -163,10 +164,12 @@ def main():
 
         vert_outputs = None
         try:
+            # vertical_confidence_grid_<formation_name> uses the bare formation name
+            # (no "_original" suffix) per the CSV/HTML/PNG naming convention.
             vert_outputs = generate_vertical_outputs(
                 vertices, triangles, None, sections_all,
                 acc_outputs.get('grid_points'), acc_outputs.get('GX'), acc_outputs.get('GY'),
-                acc_outputs.get('mask'), OUTPUT_DIR, sname, idw_power=2,
+                acc_outputs.get('mask'), OUTPUT_DIR, formation_name, idw_power=2,
                 topo_shp=topo_all, xlim=global_xlim, ylim=global_ylim, crs_proj=CRS_MODEL
             )
             if vert_outputs:
@@ -287,16 +290,6 @@ def main():
                   f"over {int(agg['n_faults_compared'])} faults (buffer {agg['buffer_dist_m']:.0f} m)")
     except Exception as e:
         print(f"Error in fault validation: {e}")
-        import traceback; traceback.print_exc()
-
-    # --- Fault throw qualitative comparison ---
-    print("\n--- Fault throw comparison ---")
-    try:
-        generate_fault_throw_comparison(
-            fault_surfaces, faglie_gdf, giaciture_gdf, study_bbox, OUTPUT_DIR
-        )
-    except Exception as e:
-        print(f"Error in fault throw comparison: {e}")
         import traceback; traceback.print_exc()
 
     # --- Acceptance table ---

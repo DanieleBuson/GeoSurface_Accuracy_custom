@@ -1,13 +1,13 @@
-# GeoSurface_Accuracy_custom — Trentino 7-Surface Model
+# Surface confidence assessment & stratigraphic boundaries and faults overlap for 3D geological models
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Jupyter](https://img.shields.io/badge/Jupyter-Notebook-orange)
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DanieleBuson/GeoSurface_Accuracy_custom/blob/main/GeoSurface_Accuracy_Custom_original.ipynb)
 
-Self-contained accuracy/confidence evaluation for a 7-surface 3D geological model
-(Trentino), with dedicated **fault-trace validation** against an independent GIS
-reference. For each surface it computes:
+Self-contained accuracy/confidence evaluation for the surfaces of a 3D geological model,
+with dedicated **fault-trace validation** against an independent GIS reference. For each
+surface it computes:
 
 - **horizontal confidence** (IDW distance to section/map controls),
 - **vertical confidence** (|ΔZ| against topography-intersection checkpoints),
@@ -18,19 +18,19 @@ reference. For each surface it computes:
 
 ## Origin and purpose
 
-This repository was built to validate the **faults of a 3D geological model of an area in
-Trentino** — checking that the fault traces and horizon outcrops computed by the 3D
-modeling software (MOVE) agree with what was independently mapped in the field/GIS,
-within a stated tolerance. The Trentino-specific pieces (the `.ts`/shapefile inputs in
+This repository was originally built to validate the **faults of a specific 3D geological
+model** — checking that the fault traces and horizon outcrops computed by the 3D modeling
+software (MOVE) agree with what was independently mapped in the field/GIS, within a stated
+tolerance. The dataset-specific pieces (the `.ts`/shapefile inputs in
 [`working_files_folder/`](./working_files_folder/), the `STRAT_MAP` stratigraphic
 translation table, the specific field names like `Nome_fagli` or `Base_di`) live in
-[`custom_validation.py`](./custom_validation.py) and the two `run_accuracy_*` files.
+[`custom_validation.py`](./custom_validation.py) and `run_accuracy_original.py`.
 
-The underlying **validation method is generic**, not tied to this dataset. It is based on
-[BaterHub/GeoSurface_Accuracy](https://github.com/BaterHub/GeoSurface_Accuracy) (the
-horizontal/vertical/combined confidence logic in [`files_utils.py`](./files_utils.py), and
-the IDW-based confidence-grid approach in general) and on the accuracy-evaluation workflow
-described in the ISPRA national 3D geological model guidelines,
+The underlying **validation method is generic**, not tied to that original dataset. It is
+based on [BaterHub/GeoSurface_Accuracy](https://github.com/BaterHub/GeoSurface_Accuracy)
+(the horizontal/vertical/combined confidence logic in [`files_utils.py`](./files_utils.py),
+and the IDW-based confidence-grid approach in general) and on the accuracy-evaluation
+workflow described in the ISPRA national 3D geological model guidelines,
 [`Petricca_etal2025_LineeGuida_StrutturaBD_Nazionale_ModGeo3D.pdf`](./Petricca_etal2025_LineeGuida_StrutturaBD_Nazionale_ModGeo3D.pdf)
 (§4.4 explicitly names `GeoSurface_Accuracy` as ISPRA's reference tool for this purpose).
 This repository's focus is a little different — it adds a *symmetric boundary/fault-overlap*
@@ -40,8 +40,8 @@ modeled trace against an independent reference trace) is the same. It is meant t
 **reusable**: anyone with a similar 3D-model export (GOCAD `.ts` surfaces + GIS reference
 shapefiles) can point this pipeline at their own dataset, or adapt
 `custom_validation.py` the way this repo adapted the upstream tool. See
-[CONTEXT.md](./CONTEXT.md) for how every THEORY.md concept maps onto the Trentino dataset
-specifically — that mapping is the template to follow for a new dataset.
+[CONTEXT.md](./CONTEXT.md) for how every THEORY.md concept maps onto the original
+case-study dataset specifically — that mapping is the template to follow for a new dataset.
 
 See **[THEORY.md](./THEORY.md)** for the full method and a description of every output
 file, and **[CONTEXT.md](./CONTEXT.md)** for background on this dataset.
@@ -116,13 +116,14 @@ Each run produces, per surface: `horizontal_confidence_grid_*.csv` (with
 
 ## Reusing this on another dataset
 
-The method does not depend on anything Trentino-specific — only on having the following
-kinds of input, in the formats below. To adapt this repo to a new 3D geological model:
+The method does not depend on anything specific to the original case study — only on
+having the following kinds of input, in the formats below. To adapt this repo to a new 3D
+geological model:
 
 | Need | Required format | Used for |
 | --- | --- | --- |
 | **Horizon surfaces** | GOCAD ASCII `.ts` file (one or more `TSURF` blocks), vertices + triangles, optionally a `Thickness` per-vertex property | The 3D surfaces being validated (`read_gocad_ts_multi` in `custom_utils.py`) |
-| **Fault surfaces** (optional) | Same GOCAD ASCII `.ts` format, separate file or mixed into the horizons file | Fault-throw impact layer per horizon, qualitative fault-throw comparison |
+| **Fault surfaces** (optional) | Same GOCAD ASCII `.ts` format, separate file or mixed into the horizons file | Fault-throw impact layer per horizon |
 | **Control points/lines** (at least one of): wells, section traces, mapped contacts | Point/line shapefile, projected CRS (meters), one geometry per control; depth/Z either in the geometry or in a companion CSV keyed by point/well id | Horizontal-confidence (IDW) controls — wells get highest priority (`p=1`), sections next (`p=2`), maps last (`p=3`) |
 | **Topography intersections** | Line shapefile, one feature (or feature group) per surface, attribute identifying which surface it belongs to, geometry Z = ground-truth elevation (e.g. DEM) | Vertical-confidence checkpoints — the most direct ground truth available |
 | **Independently mapped geological contacts** (for boundary-overlap) | Line shapefile, one feature (or feature group) per contact, attribute linking each contact to a surface (e.g. a "base of" field), optional reliability/observation-method attribute | Symmetric `overlap_pct_*` metric: model trace vs. independently mapped trace |
@@ -143,5 +144,5 @@ What to change when porting to a new dataset:
    dataset currently uses 20 m).
 
 See [CONTEXT.md](./CONTEXT.md) for a concrete worked example of every one of these mapping
-decisions on the Trentino dataset, and [THEORY.md](./THEORY.md) for the full math behind
-each metric.
+decisions on the original case-study dataset, and [THEORY.md](./THEORY.md) for the full
+math behind each metric.

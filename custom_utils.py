@@ -1,5 +1,5 @@
 """
-Re-export of files_utils.py for the custom Trentino dataset pipeline.
+Re-export of files_utils.py for the custom dataset pipeline.
 
 This module exists for backward compatibility with the existing notebooks/scripts,
 which import from `custom_utils`. The implementation itself (readers, IDW,

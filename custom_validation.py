@@ -1,5 +1,5 @@
 """
-custom_validation.py — extended geological validation for the Trentino 7-surface model.
+custom_validation.py — dataset-specific extended geological validation logic.
 
 New functions called by run_accuracy_original.py:
   - select_map_lines_strat       : corrected stratigraphic contact matching
@@ -8,7 +8,6 @@ New functions called by run_accuracy_original.py:
   - compute_fault_throw_per_horizon    : IDW fault-throw-impact layer per horizon
   - generate_fault_validation_outputs  : dissolved MOVE faults vs dissolved GIS faults,
                                           symmetric overlap (fault_overlap_A_to_B / _B_to_A / _mean)
-  - generate_fault_throw_comparison    : qualitative modeled vs observed throw table
   - compute_unit_thickness_at_grid     : interpolate PVRTX Thickness onto eval grid
   - compute_acceptance_class           : single-surface acceptance classification (keyed on
                                           overlap_pct_mean)
@@ -58,18 +57,6 @@ STRAT_MAP = {
 }
 
 STRAT_SUCCESSION = ['DPR', 'FMZ', 'LOP', 'RTZINF', 'RTZSUP', 'OSV', 'ARV']
-
-THROW_CLASSES = [(5, 20), (20, 50), (50, 80), (80, 120), (120, float('inf'))]
-
-
-def _throw_class_label(throw_m):
-    if throw_m is None or np.isnan(throw_m):
-        return 'unknown'
-    for lo, hi in THROW_CLASSES:
-        if lo <= throw_m < hi:
-            hi_str = f'{hi:.0f}' if hi < float('inf') else '+'
-            return f'{lo:.0f}–{hi_str} m'
-    return f'< {THROW_CLASSES[0][0]:.0f} m'
 
 
 def _normalize_fault_id(text):
@@ -545,104 +532,7 @@ def generate_fault_validation_outputs(topo_faults_shp, faglie_gdf,
 
 
 # ---------------------------------------------------------------------------
-# 5. Fault throw comparison (qualitative)
-# ---------------------------------------------------------------------------
-
-def generate_fault_throw_comparison(fault_surfaces_dict, faglie_gdf, giaciture_gdf,
-                                    study_bbox, output_dir):
-    """
-    Qualitative comparison of modeled fault throw (Z-range proxy per fault surface) vs
-    observed throw classification from Faglie_carta_geologica_DEF.shp.
-
-    fault_surfaces_dict: {name: {'vertices': np.array}} for fault surfaces only
-    faglie_gdf         : GeoDataFrame, EPSG:6707 (native), Tipo_fagli field
-    giaciture_gdf      : GeoDataFrame, EPSG:6707 (native), TIPO field (faglia/s0)
-    study_bbox         : (xmin, ymin, xmax, ymax) in EPSG:6707
-
-    Writes fault_throw_comparison.csv to output_dir.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-
-    xmin, ymin, xmax, ymax = study_bbox
-
-    # Filter faglie and giaciture to study area
-    faglie_study = faglie_gdf.cx[xmin:xmax, ymin:ymax] if faglie_gdf is not None else None
-    giac_faults = None
-    if giaciture_gdf is not None:
-        g_study = giaciture_gdf.cx[xmin:xmax, ymin:ymax]
-        giac_faults = g_study[g_study.get('TIPO', g_study.get('Tipo', pd.Series())).str.lower() == 'faglia']
-
-    rows = []
-    for fname, fdata in fault_surfaces_dict.items():
-        fv = fdata.get('vertices')
-        if fv is None or len(fv) == 0:
-            continue
-
-        # Modeled throw proxy: Z range of fault surface vertices
-        z_vals = fv[:, 2]
-        modeled_throw = float(np.nanmax(z_vals) - np.nanmin(z_vals))
-        modeled_class = _throw_class_label(modeled_throw)
-
-        # Observed throw from Faglie: check if any Faglie feature is spatially near this fault
-        observed_class = 'unknown'
-        tipo_fagli_val = ''
-        if faglie_study is not None and not faglie_study.empty:
-            fault_xy = fv[:, :2]
-            fault_centroid_x = float(np.mean(fault_xy[:, 0]))
-            fault_centroid_y = float(np.mean(fault_xy[:, 1]))
-            from shapely.geometry import Point as ShapelyPoint
-            fault_pt = ShapelyPoint(fault_centroid_x, fault_centroid_y)
-            # Find nearest Faglie feature within 500 m of fault centroid
-            dists = faglie_study.geometry.distance(fault_pt)
-            if dists.min() < 500:
-                nearest_idx = dists.idxmin()
-                tf = str(faglie_study.loc[nearest_idx, 'Tipo_fagli']) if 'Tipo_fagli' in faglie_study.columns else ''
-                tipo_fagli_val = tf
-                if 'non trascurabile' in tf.lower():
-                    observed_class = 'significant (>20 m)'
-                elif 'trascurabile' in tf.lower():
-                    observed_class = 'negligible (<20 m)'
-
-        # Giaciture fault measurements near this fault
-        giac_near = 0
-        if giac_faults is not None and not giac_faults.empty:
-            from shapely.geometry import Point as ShapelyPoint
-            fp = ShapelyPoint(float(np.mean(fv[:, 0])), float(np.mean(fv[:, 1])))
-            giac_dists = giac_faults.geometry.distance(fp)
-            giac_near = int((giac_dists < 300).sum())
-
-        agreement = 'N/A'
-        if observed_class != 'unknown':
-            if observed_class == 'significant (>20 m)' and modeled_throw > 20:
-                agreement = 'consistent'
-            elif observed_class == 'negligible (<20 m)' and modeled_throw <= 20:
-                agreement = 'consistent'
-            else:
-                agreement = 'discrepant'
-
-        rows.append({
-            'fault_name': fname,
-            'modeled_throw_m': round(modeled_throw, 1),
-            'modeled_throw_class': modeled_class,
-            'observed_throw_class': observed_class,
-            'tipo_fagli': tipo_fagli_val,
-            'agreement': agreement,
-            'n_giaciture_fault_measurements_near': giac_near,
-        })
-
-    if not rows:
-        print("  Fault throw comparison: no fault surfaces to compare.")
-        return None
-
-    df = pd.DataFrame(rows)
-    csv_path = os.path.join(output_dir, 'fault_throw_comparison.csv')
-    df.to_csv(csv_path, index=False)
-    print(f"  Wrote {csv_path}")
-    return df
-
-
-# ---------------------------------------------------------------------------
-# 6. Unit thickness interpolation from PVRTX property
+# 5. Unit thickness interpolation from PVRTX property
 # ---------------------------------------------------------------------------
 
 def compute_unit_thickness_at_grid(horizon_vertices, thickness_arr, grid_points):
@@ -675,7 +565,7 @@ def compute_unit_thickness_at_grid(horizon_vertices, thickness_arr, grid_points)
 
 
 # ---------------------------------------------------------------------------
-# 7. Acceptance classification
+# 6. Acceptance classification
 # ---------------------------------------------------------------------------
 
 def compute_acceptance_class(overlap_pct_mean):
@@ -700,7 +590,7 @@ def compute_acceptance_class(overlap_pct_mean):
 
 
 # ---------------------------------------------------------------------------
-# 8. Acceptance table
+# 7. Acceptance table
 # ---------------------------------------------------------------------------
 
 def generate_acceptance_table(per_surface_results, output_dir):

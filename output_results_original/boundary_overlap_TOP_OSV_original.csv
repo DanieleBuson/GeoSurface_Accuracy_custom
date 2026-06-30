@@ -1,0 +1,2 @@
+surface,move_length_m,gis_length_m,overlap_pct_A_to_B,overlap_pct_B_to_A,overlap_pct_mean,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
+TOP_OSV_original,12368.480042403115,7621.221751932317,56.137682686261776,84.94363413686384,70.5406584115628,20.0,1,21

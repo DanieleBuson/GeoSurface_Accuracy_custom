@@ -1,2 +1,0 @@
-surface,move_length_m,gis_length_m,overlap_pct_A_to_B,overlap_pct_B_to_A,overlap_pct_mean,buffer_dist_m,n_move_segments_merged,n_gis_segments_merged
-TOP_DPR_merged_resampledoriginal,19748.908266502538,4975.709074283848,20.87188328999254,74.66325639201617,47.76756984100435,20.0,1,10

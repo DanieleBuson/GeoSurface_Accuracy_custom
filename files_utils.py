@@ -362,17 +362,31 @@ def read_topo_intersections_shapefile(working_dir):
 
 def _surface_short_code(surface_name):
     """
-    Reduce a GOCAD surface name (e.g. 'TOP_RTZinf_merged_resampled_original') to a short
-    code (e.g. 'RTZINF') for matching against map/topo shapefile attributes.
+    Reduce a GOCAD surface name to a short code (e.g. 'RTZINF') for matching against
+    map/topo shapefile attributes. Handles both raw modeling-software exports (e.g.
+    'TOP_RTZinf_merged_resampled_original') and the cleaned output-filename form (e.g.
+    'TOP_RTZinf_original'), since both carry the same formation code.
     """
     s = str(surface_name).upper().strip()
     if s.startswith('TOP_'):
         s = s[4:]
     elif s.startswith('TOP'):
         s = s[3:]
-    s = re.split(r'_MERGED', s)[0]
+    s = re.split(r'_(?:MERGED|RESAMPLED|SPLIT|ORIGINAL)', s)[0]
     s = re.sub(r'[^A-Z0-9]', '', s)
     return s
+
+
+def clean_formation_name(surface_name):
+    """
+    Reduce a GOCAD surface name (e.g. 'TOP_RTZinf_merged_resampled_original') to a clean
+    formation name for output filenames (e.g. 'TOP_RTZinf'), preserving the formation
+    code's original capitalization as exported from the GOCAD file. Strips
+    modeling-software processing tags (merged/resampled/split/original) without altering
+    the formation code itself.
+    """
+    s = str(surface_name).strip()
+    return re.split(r'_(?:merged|resampled|split|original)', s, flags=re.IGNORECASE)[0]
 
 
 def _normalize_map_code(text):
@@ -888,33 +902,6 @@ def generate_accuracy_outputs(vertices, wells_shp, sections_shp, output_dir,
             plt.close(fig_rank)
         except Exception as e:
             warnings.warn(f"Could not save confidence ranking plot: {e}")
-
-    # Istogrammi distanze (km)
-    try:
-        fig_h = plt.figure(figsize=(8, 6))
-        max_km = 0
-        if wells_points is not None:
-            max_km = max(max_km, df['dist_wells_km'].max())
-            bins_w = np.arange(df['dist_wells_km'].min(), df['dist_wells_km'].max() + 0.1, 5)
-            plt.hist(df['dist_wells_km'], bins=bins_w, alpha=0.6, label='Wells', histtype='step', linewidth=2)
-        if sections_points is not None:
-            max_km = max(max_km, df['dist_sections_km'].max())
-            bins_s = np.arange(df['dist_sections_km'].min(), df['dist_sections_km'].max() + 0.1, 5)
-            plt.hist(df['dist_sections_km'], bins=bins_s, alpha=0.6, label='Sections', histtype='step', linewidth=2)
-        if maps_points is not None:
-            max_km = max(max_km, df['dist_maps_km'].max())
-            bins_m = np.arange(df['dist_maps_km'].min(), df['dist_maps_km'].max() + 0.1, 5)
-            plt.hist(df['dist_maps_km'], bins=bins_m, alpha=0.6, label='Maps', histtype='step', linewidth=2)
-        plt.xlabel(f'distance from nearest checkpoint (km) - {surface_name}')
-        plt.ylabel('occurrences')
-        if max_km > 0:
-            plt.xlim([0, max_km * 1.05])
-        if (wells_points is not None) or (sections_points is not None) or (maps_points is not None):
-            plt.legend()
-        plt.savefig(os.path.join(output_dir, f'distance_histogram_{surface_name}.png'), dpi=300, bbox_inches='tight')
-        plt.close(fig_h)
-    except Exception as e:
-        warnings.warn(f"Could not save distance histogram: {e}")
 
     # Interattivo IDW
     if crs_proj:
@@ -1568,7 +1555,7 @@ def generate_vertical_outputs(vertices, triangles, wells_shp, sections_shp, grid
             warnings.warn(f"Could not save vertical heatmap {fname}: {e}")
 
     _plot_heat(abs_delta_norm, f'Vertical confidence normalized |dZ| - {surface_name}',
-               f'vertical_deltaZ_norm_{surface_name}.png', cmap='plasma',
+               f'vertical_confidence_grid_{surface_name}.png', cmap='plasma',
                vmin=0, vmax=1, cbar_label='normalized |dZ| (1=best)')
 
     # Interactive scatter
@@ -1636,7 +1623,7 @@ def generate_vertical_outputs(vertices, triangles, wells_shp, sections_shp, grid
                                  labels={'abs_delta_norm': 'normalized |dZ| (1 = best)'})
                 fig.update_layout(xaxis_title='X', yaxis_title='Y', dragmode='zoom')
                 add_iso_lines(fig, abs_delta_norm, to_lonlat=False)
-            fig.write_html(os.path.join(output_dir, f'vertical_deltaZ_{surface_name}.html'),
+            fig.write_html(os.path.join(output_dir, f'vertical_confidence_grid_{surface_name}.html'),
                            config={"scrollZoom": True})
         except Exception as e:
             warnings.warn(f"Could not save vertical interactive map: {e}")
