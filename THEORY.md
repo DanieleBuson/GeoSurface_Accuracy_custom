@@ -2,7 +2,7 @@
 
 This document explains **what the pipeline in this repository computes, why, and what every
 generated file means**. It is self-contained: you do not need access to any other repository
-to understand it.
+to understand it. 
 
 ## 1. Where this comes from
 
