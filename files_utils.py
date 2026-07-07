@@ -16,7 +16,6 @@ import warnings
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator
 
-
 # Read a single-surface GOCAD .ts file
 def read_gocad_ts(file_path):
     """
